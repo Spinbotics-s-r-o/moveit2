@@ -599,9 +599,19 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
   Eigen::MatrixXd matrix_s = svd.singularValues().asDiagonal();
   Eigen::MatrixXd pseudo_inverse = svd.matrixV() * matrix_s.inverse() * svd.matrixU().transpose();
 
+  bool use_inv_jacobian = use_inv_jacobian_;
+  if (!use_inv_jacobian
+    && std::find(drift_dimensions_.begin(), drift_dimensions_.end(), true) == drift_dimensions_.end())
+  {
+    RCLCPP_WARN_ONCE(LOGGER, "IK solving not supported with drift dimensions, using inverse jacobian."
+      "This will be printed only once.");
+    use_inv_jacobian = true;
+  }
+
   // Convert from cartesian commands to joint commands
   // Use an IK solver plugin if we have one, otherwise use inverse Jacobian.
-  if (!use_inv_jacobian_)
+  // Also use inverse Jacobian if drift dimensions are used, since IK solvers don't support them
+  if (!use_inv_jacobian)
   {
     // get a transformation matrix with the desired position change &
     // get a transformation matrix with desired orientation change

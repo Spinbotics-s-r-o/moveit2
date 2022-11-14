@@ -101,7 +101,7 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
   // The last column of U from the SVD of the Jacobian points directly toward or away from the singularity.
   // The sign can flip at any time, so we have to do some extra checking.
   // Look ahead to see if the Jacobian's condition will decrease.
-  Eigen::VectorXd vector_toward_singularity = svd.matrixU().col(num_dimensions - 1);
+  Eigen::VectorXd vector_toward_singularity = svd.matrixU().col(svd.matrixU().cols() - 1);
 
   double ini_condition = svd.singularValues()(0) / svd.singularValues()(svd.singularValues().size() - 1);
 
