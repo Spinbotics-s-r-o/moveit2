@@ -592,6 +592,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
   Eigen::MatrixXd jacobian = current_state_->getJacobian(joint_model_group_);
 
+  Eigen::MatrixXd jacobian_full = jacobian;
   removeDriftDimensions(jacobian, delta_x);
 
   Eigen::JacobiSVD<Eigen::MatrixXd> svd =
@@ -680,6 +681,12 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
                                                       parameters_->leaving_singularity_threshold_multiplier,
                                                       *node_->get_clock(), current_state_, status_);
 
+  double drift_factor = velocityScalingFactorForDriftDimensions(delta_theta_, jacobian_full, drift_dimensions_,
+                                                                parameters_->drift_speed_correction_drifting_dimension_multipliers,
+                                                                parameters_->drift_speed_correction_nondrifting_dimension_multipliers,
+                                                                parameters_->drift_speed_correction_power);
+  delta_theta_ *= drift_factor;
+  
   return internalServoUpdate(delta_theta_, joint_trajectory, ServoType::CARTESIAN_SPACE);
 }
 

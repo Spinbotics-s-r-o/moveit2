@@ -105,6 +105,10 @@ struct ServoParameters
   double collision_check_rate{ 10.0 };
   double self_collision_proximity_threshold{ 0.01 };
   double scene_collision_proximity_threshold{ 0.02 };
+  // Drifting speed limits
+  std::vector<double> drift_speed_correction_drifting_dimension_multipliers{ {1.0, 1.0, 1.0, 0.1, 0.1, 0.1} };
+  std::vector<double> drift_speed_correction_nondrifting_dimension_multipliers{ {1.0, 1.0, 1.0, 0.4, 0.4, 0.4} };
+  double drift_speed_correction_power{ 1.5 };
 
   /**
    * Declares, reads, and validates parameters used for moveit_servo
