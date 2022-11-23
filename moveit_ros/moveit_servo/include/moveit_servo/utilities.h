@@ -78,4 +78,18 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
                                            const double leaving_singularity_threshold_multiplier, rclcpp::Clock& clock,
                                            const moveit::core::RobotStatePtr& current_state, StatusCode& status);
 
+/** \brief Calculate a velocity scaling factor, due to existence of movements in drifting dimensions
+ * @param[in] delta_theta          The commanded joint speeds
+ * @param[in] jacobian             The Jacobian
+ * @param[in] drift_dimensions     The drift dimensions which were ignored in delta_theta computation but do have an impact here
+ * @param[in] drifting_dimension_multipliers    Multiplier applied to each of the drifting dimensions
+ * @param[in] nondrifting_dimension_multipliers Multiplier applied to each of the non-drifting dimensions
+ * @param[in] scaling_factor_power Power to be applied on final non-drifting/total speed ratio
+ */
+double velocityScalingFactorForDriftDimensions(const Eigen::VectorXd& delta_theta,
+                                              const Eigen::MatrixXd& jacobian,
+                                              const std::array<bool, 6> &drift_dimensions,
+                                              const std::vector<double> &drifting_dimension_multipliers,
+                                              const std::vector<double> &nondrifting_dimension_multipliers,
+                                              const double scaling_factor_power);
 }  // namespace moveit_servo

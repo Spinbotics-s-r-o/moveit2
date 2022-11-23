@@ -156,4 +156,38 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
   return velocity_scale;
 }
 
+/** \brief Calculate a velocity scaling factor, due to existence of movements in drifting dimensions
+ * @param[in] delta_theta          The commanded joint speeds
+ * @param[in] jacobian             The Jacobian
+ * @param[in] drift_dimensions     The drift dimensions which were ignored in delta_theta computation but do have an impact here
+ * @param[in] drifting_dimension_multipliers    Multiplier applied to each of the drifting dimensions
+ * @param[in] nondrifting_dimension_multipliers Multiplier applied to each of the non-drifting dimensions
+ * @param[in] scaling_factor_power Power to be applied on final non-drifting/total speed ratio
+ */
+double velocityScalingFactorForDriftDimensions(const Eigen::VectorXd& delta_theta,
+                                              const Eigen::MatrixXd& jacobian,
+                                              const std::array<bool, 6> &drift_dimensions,
+                                              const std::vector<double> &drifting_dimension_multipliers,
+                                              const std::vector<double> &nondrifting_dimension_multipliers,
+                                              const double scaling_factor_power)
+{
+  if (scaling_factor_power == 0)  // this would always result in 1, skip computations
+    return 1;
+  const Eigen::VectorXd delta_x = jacobian*delta_theta;
+
+  // compute speeds
+  double nondrifting_velocity_sqr = 0;
+  double total_velocity_sqr = 0;
+  for (size_t i = 0; i < drift_dimensions.size(); i++) {
+    double multiplied_velocity = delta_x[i]*(drift_dimensions[i] ? drifting_dimension_multipliers[i] : nondrifting_dimension_multipliers[i]);
+    double multiplied_velocity_sqr = multiplied_velocity*multiplied_velocity;
+    if (!drift_dimensions[i])
+      nondrifting_velocity_sqr += multiplied_velocity_sqr;
+    total_velocity_sqr += multiplied_velocity_sqr;
+  }
+  if (total_velocity_sqr == 0)  // no movement of end effector at all -> no need to constrain anything
+    return 1;
+  return pow(nondrifting_velocity_sqr/total_velocity_sqr, scaling_factor_power/2);  // pow(sqrt(x), p) is the same as pow(x, p/2)
+}
+
 }  // namespace moveit_servo

@@ -94,6 +94,7 @@ void ServoParameters::declare(const std::string& ns,
   using rclcpp::ParameterType::PARAMETER_DOUBLE;
   using rclcpp::ParameterType::PARAMETER_INTEGER;
   using rclcpp::ParameterType::PARAMETER_STRING;
+  using rclcpp::ParameterType::PARAMETER_DOUBLE_ARRAY;
   auto parameters = ServoParameters{};
 
   // ROS Parameters
@@ -262,6 +263,25 @@ void ServoParameters::declare(const std::string& ns,
                                      ParameterDescriptorBuilder{}
                                          .type(PARAMETER_DOUBLE)
                                          .description("Start decelerating when a scene collision is this far [m]"));
+
+  // Drifting speed limits
+  node_parameters->declare_parameter(ns + ".drift_speed_correction_drifting_dimension_multipliers",
+                                     ParameterValue{ parameters.drift_speed_correction_drifting_dimension_multipliers },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE_ARRAY)
+                                         .description("How much speed of each drifting dimension is projected into final speed limitation factor."
+                                                      " Must contain 6 values"));
+  node_parameters->declare_parameter(ns + ".drift_speed_correction_nondrifting_dimension_multipliers",
+                                     ParameterValue{ parameters.drift_speed_correction_nondrifting_dimension_multipliers },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE_ARRAY)
+                                         .description("How much speed of each non-drifting dimension is projected into final speed limitation factor."
+                                                      " Must contain 6 values"));
+  node_parameters->declare_parameter(ns + ".drift_speed_correction_power",
+                                     ParameterValue{ parameters.drift_speed_correction_power },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("How powerful non-drifting/total speed ratio should be in decreasing final speed"));
 }
 
 ServoParameters ServoParameters::get(const std::string& ns,
@@ -347,6 +367,14 @@ ServoParameters ServoParameters::get(const std::string& ns,
       node_parameters->get_parameter(ns + ".self_collision_proximity_threshold").as_double();
   parameters.scene_collision_proximity_threshold =
       node_parameters->get_parameter(ns + ".scene_collision_proximity_threshold").as_double();
+
+  // Drifting speed limits
+  parameters.drift_speed_correction_drifting_dimension_multipliers =
+      node_parameters->get_parameter(ns + ".drift_speed_correction_drifting_dimension_multipliers").as_double_array();
+  parameters.drift_speed_correction_nondrifting_dimension_multipliers =
+      node_parameters->get_parameter(ns + ".drift_speed_correction_nondrifting_dimension_multipliers").as_double_array();
+  parameters.drift_speed_correction_power =
+      node_parameters->get_parameter(ns + ".drift_speed_correction_power").as_double();
 
   return parameters;
 }
@@ -448,6 +476,30 @@ std::optional<ServoParameters> ServoParameters::validate(ServoParameters paramet
   {
     RCLCPP_WARN(LOGGER, "Parameter 'collision_check_rate' should be "
                         "greater than zero. Check yaml file.");
+    return std::nullopt;
+  }
+  // Drifting speed limits
+  if (parameters.drift_speed_correction_drifting_dimension_multipliers.size() != 6 ||
+      std::find_if( parameters.drift_speed_correction_drifting_dimension_multipliers.begin(),
+                    parameters.drift_speed_correction_drifting_dimension_multipliers.end(),
+                    [](const double &value){ return value < 0; }) != parameters.drift_speed_correction_drifting_dimension_multipliers.end())
+  {
+    RCLCPP_WARN(LOGGER, "Parameter 'drift_speed_correction_drifting_dimension_multipliers' should contain "
+                        "6 non-negative values");
+    return std::nullopt;
+  }
+  if (parameters.drift_speed_correction_nondrifting_dimension_multipliers.size() != 6 ||
+      std::find_if( parameters.drift_speed_correction_nondrifting_dimension_multipliers.begin(),
+                    parameters.drift_speed_correction_nondrifting_dimension_multipliers.end(),
+                    [](const double &value){ return value < 0; }) != parameters.drift_speed_correction_nondrifting_dimension_multipliers.end())
+  {
+    RCLCPP_WARN(LOGGER, "Parameter 'drift_speed_correction_nondrifting_dimension_multipliers' should contain "
+                        "6 non-negative values");
+    return std::nullopt;
+  }
+  if (parameters.drift_speed_correction_power < 0)
+  {
+    RCLCPP_WARN(LOGGER, "Parameter 'drift_speed_correction_power' should be non-negative");
     return std::nullopt;
   }
   return parameters;
