@@ -146,7 +146,7 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
   }
 
   // Very close to singularity, so halt.
-  else if (ini_condition >= upper_threshold)
+  else if (ini_condition >= hard_stop_singularity_threshold)
   {
     velocity_scale = 0;
     status = StatusCode::HALT_FOR_SINGULARITY;
