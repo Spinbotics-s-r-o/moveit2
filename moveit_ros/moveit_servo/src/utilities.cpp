@@ -169,7 +169,8 @@ double velocityScalingFactorForDriftDimensions(const Eigen::VectorXd& delta_thet
                                               const std::array<bool, 6> &drift_dimensions,
                                               const std::vector<double> &drifting_dimension_multipliers,
                                               const std::vector<double> &nondrifting_dimension_multipliers,
-                                              const double scaling_factor_power)
+                                              const double scaling_factor_power,
+                                              const std::array<bool, 6> &ignored_dimensions)
 {
   if (scaling_factor_power == 0)  // this would always result in 1, skip computations
     return 1;
@@ -179,6 +180,8 @@ double velocityScalingFactorForDriftDimensions(const Eigen::VectorXd& delta_thet
   double nondrifting_velocity_sqr = 0;
   double total_velocity_sqr = 0;
   for (size_t i = 0; i < drift_dimensions.size(); i++) {
+    if (ignored_dimensions[i])
+      continue;
     double multiplied_velocity = delta_x[i]*(drift_dimensions[i] ? drifting_dimension_multipliers[i] : nondrifting_dimension_multipliers[i]);
     double multiplied_velocity_sqr = multiplied_velocity*multiplied_velocity;
     if (!drift_dimensions[i])
