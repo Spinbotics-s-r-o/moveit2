@@ -91,5 +91,6 @@ double velocityScalingFactorForDriftDimensions(const Eigen::VectorXd& delta_thet
                                               const std::array<bool, 6> &drift_dimensions,
                                               const std::vector<double> &drifting_dimension_multipliers,
                                               const std::vector<double> &nondrifting_dimension_multipliers,
-                                              const double scaling_factor_power);
+                                              const double scaling_factor_power,
+                                              const std::array<bool, 6> &ignored_dimensions = {false, false, false, false, false, false});
 }  // namespace moveit_servo
