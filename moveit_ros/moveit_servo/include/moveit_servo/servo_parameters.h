@@ -109,6 +109,11 @@ struct ServoParameters
   std::vector<double> drift_speed_correction_drifting_dimension_multipliers{ {1.0, 1.0, 1.0, 0.1, 0.1, 0.1} };
   std::vector<double> drift_speed_correction_nondrifting_dimension_multipliers{ {1.0, 1.0, 1.0, 0.4, 0.4, 0.4} };
   double drift_speed_correction_power{ 1.5 };
+  double drift_speed_correction_power_ik{ 0.75 };
+  double ik_vs_jacobi_drifting_error_weight{ 1.0 };
+  double ik_vs_jacobi_nondrifting_error_weight{ 10.0 };
+  double ik_vs_jacobi_theta_weight{ 10.0 };
+  double ik_lookahead_seconds{ 0.15 };
 
   /**
    * Declares, reads, and validates parameters used for moveit_servo

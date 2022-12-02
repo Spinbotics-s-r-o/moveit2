@@ -99,6 +99,12 @@ void ServoParameters::declare(const std::string& ns,
 
   // ROS Parameters
   node_parameters->declare_parameter(
+      "spinbot.position_only_ik", ParameterValue{ false });
+  node_parameters->declare_parameter(
+      "robot_description_kinematics.spinbot.position_only_ik", ParameterValue{ false });
+  node_parameters->declare_parameter(
+      "position_only_ik", ParameterValue{ false });
+  node_parameters->declare_parameter(
       ns + ".use_gazebo", ParameterValue{ parameters.use_gazebo },
       ParameterDescriptorBuilder{}
           .type(PARAMETER_BOOL)
@@ -282,6 +288,35 @@ void ServoParameters::declare(const std::string& ns,
                                      ParameterDescriptorBuilder{}
                                          .type(PARAMETER_DOUBLE)
                                          .description("How powerful non-drifting/total speed ratio should be in decreasing final speed"));
+  node_parameters->declare_parameter(ns + ".drift_speed_correction_power_ik",
+                                     ParameterValue{ parameters.drift_speed_correction_power_ik },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("How powerful non-drifting/total speed ratio should be in decreasing final speed"
+                                                      "when using IK solution"));
+  node_parameters->declare_parameter(ns + ".ik_vs_jacobi_nondrifting_error_weight",
+                                     ParameterValue{ parameters.ik_vs_jacobi_nondrifting_error_weight },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("Ratio of non-drifting error vs drifting error when computing score in competition whether"
+                                                      "to use inverse kinematics solution or inverse jacobi"));
+  node_parameters->declare_parameter(ns + ".ik_vs_jacobi_drifting_error_weight",
+                                     ParameterValue{ parameters.ik_vs_jacobi_drifting_error_weight },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("Ratio of drifting error vs drifting error when computing score in competition whether"
+                                                      "to use inverse kinematics solution or inverse jacobi"));
+  node_parameters->declare_parameter(ns + ".ik_vs_jacobi_theta_weight",
+                                     ParameterValue{ parameters.ik_vs_jacobi_theta_weight },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("Ratio of joints movement magnitude in competition whether"
+                                                      "to use inverse kinematics solution or inverse jacobi"));
+  node_parameters->declare_parameter(ns + ".ik_lookahead_seconds",
+                                     ParameterValue{ parameters.ik_lookahead_seconds },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("How far (in seconds) should inverse kinematics look for a next pose when compute joint velocities"));
 }
 
 ServoParameters ServoParameters::get(const std::string& ns,
@@ -375,6 +410,16 @@ ServoParameters ServoParameters::get(const std::string& ns,
       node_parameters->get_parameter(ns + ".drift_speed_correction_nondrifting_dimension_multipliers").as_double_array();
   parameters.drift_speed_correction_power =
       node_parameters->get_parameter(ns + ".drift_speed_correction_power").as_double();
+  parameters.drift_speed_correction_power_ik =
+      node_parameters->get_parameter(ns + ".drift_speed_correction_power_ik").as_double();
+  parameters.ik_vs_jacobi_nondrifting_error_weight =
+      node_parameters->get_parameter(ns + ".ik_vs_jacobi_nondrifting_error_weight").as_double();
+  parameters.ik_vs_jacobi_drifting_error_weight =
+      node_parameters->get_parameter(ns + ".ik_vs_jacobi_drifting_error_weight").as_double();
+  parameters.ik_vs_jacobi_theta_weight =
+      node_parameters->get_parameter(ns + ".ik_vs_jacobi_theta_weight").as_double();
+  parameters.ik_lookahead_seconds =
+      node_parameters->get_parameter(ns + ".ik_lookahead_seconds").as_double();
 
   return parameters;
 }
