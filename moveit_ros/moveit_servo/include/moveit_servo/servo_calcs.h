@@ -251,6 +251,11 @@ protected:
   bool resetServoStatus(const std::shared_ptr<std_srvs::srv::Empty::Request>& req,
                         const std::shared_ptr<std_srvs::srv::Empty::Response>& res);
 
+  double solutionScore(
+    const Eigen::VectorXd &delta_theta, const Eigen::VectorXd &desired_delta_x, double delta_x_norm_weighted,
+    const Eigen::MatrixXd &jacobian_full, moveit::core::RobotState &robot_state, double lookahead_interval, const std::string &name,
+    double *direction_error = nullptr);
+
   // Pointer to the ROS node
   std::shared_ptr<rclcpp::Node> node_;
 
@@ -358,5 +363,9 @@ protected:
   kinematics::KinematicsBaseConstPtr ik_solver_;
   Eigen::Isometry3d ik_base_to_tip_frame_;
   bool use_inv_jacobian_ = false;
+
+  std::vector<double> debug_data_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr debug_pub_;
+  std::string last_used_solution_source_;
 };
 }  // namespace moveit_servo

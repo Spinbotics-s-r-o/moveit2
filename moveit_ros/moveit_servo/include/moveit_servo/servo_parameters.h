@@ -114,6 +114,8 @@ struct ServoParameters
   double ik_vs_jacobi_nondrifting_error_weight{ 10.0 };
   double ik_vs_jacobi_theta_weight{ 10.0 };
   double ik_lookahead_seconds{ 0.15 };
+  double ik_rotation_error_multiplier{ 1.0 };
+  double ik_direction_error_slowdown_factor{ 3.0 };
 
   /**
    * Declares, reads, and validates parameters used for moveit_servo

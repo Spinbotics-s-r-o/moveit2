@@ -99,12 +99,6 @@ void ServoParameters::declare(const std::string& ns,
 
   // ROS Parameters
   node_parameters->declare_parameter(
-      "spinbot.position_only_ik", ParameterValue{ false });
-  node_parameters->declare_parameter(
-      "robot_description_kinematics.spinbot.position_only_ik", ParameterValue{ false });
-  node_parameters->declare_parameter(
-      "position_only_ik", ParameterValue{ false });
-  node_parameters->declare_parameter(
       ns + ".use_gazebo", ParameterValue{ parameters.use_gazebo },
       ParameterDescriptorBuilder{}
           .type(PARAMETER_BOOL)
@@ -317,6 +311,16 @@ void ServoParameters::declare(const std::string& ns,
                                      ParameterDescriptorBuilder{}
                                          .type(PARAMETER_DOUBLE)
                                          .description("How far (in seconds) should inverse kinematics look for a next pose when compute joint velocities"));
+  node_parameters->declare_parameter(ns + ".ik_rotation_error_multiplier",
+                                     ParameterValue{ parameters.ik_rotation_error_multiplier },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("How many meters error is equal to 1 rad error"));
+  node_parameters->declare_parameter(ns + ".ik_direction_error_slowdown_factor",
+                                     ParameterValue{ parameters.ik_direction_error_slowdown_factor },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("How much an inaccurate ik solution should be slowed down due to its direction error"));
 }
 
 ServoParameters ServoParameters::get(const std::string& ns,
@@ -420,6 +424,10 @@ ServoParameters ServoParameters::get(const std::string& ns,
       node_parameters->get_parameter(ns + ".ik_vs_jacobi_theta_weight").as_double();
   parameters.ik_lookahead_seconds =
       node_parameters->get_parameter(ns + ".ik_lookahead_seconds").as_double();
+  parameters.ik_rotation_error_multiplier =
+      node_parameters->get_parameter(ns + ".ik_rotation_error_multiplier").as_double();
+  parameters.ik_direction_error_slowdown_factor =
+      node_parameters->get_parameter(ns + ".ik_direction_error_slowdown_factor").as_double();
 
   return parameters;
 }

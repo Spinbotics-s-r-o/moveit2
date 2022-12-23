@@ -46,6 +46,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   std_srvs
   tf2_eigen
   trajectory_msgs
+  ik_common
 )
 
 find_package(ament_cmake REQUIRED)

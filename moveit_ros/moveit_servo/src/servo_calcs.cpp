@@ -42,7 +42,7 @@
 #include <chrono>
 #include <mutex>
 
-#include <controller_manager/realtime.hpp>
+// #include <controller_manager/realtime.hpp>
 #include <std_msgs/msg/bool.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
@@ -50,6 +50,7 @@
 #include <moveit_servo/enforce_limits.hpp>
 #include <moveit_servo/servo_calcs.h>
 #include <moveit_servo/utilities.h>
+#include "ik_common/dynamically_adjustable_ik.hpp"
 
 using namespace std::chrono_literals;  // for s, ms, etc.
 
@@ -149,6 +150,8 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
     multiarray_outgoing_cmd_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
         parameters_->command_out_topic, rclcpp::SystemDefaultsQoS());
   }
+  debug_pub_ = node_->create_publisher<std_msgs::msg::Float64MultiArray>(
+      "/servo_debug", rclcpp::SystemDefaultsQoS());
 
   // Publish status
   status_pub_ = node_->create_publisher<std_msgs::msg::Int8>(parameters_->status_topic, rclcpp::SystemDefaultsQoS());
@@ -257,21 +260,22 @@ void ServoCalcs::start()
   }
 
   stop_requested_ = false;
-  thread_ = std::thread([this] {
-    // Check if a realtime kernel is installed. Set a higher thread priority, if so
-    if (controller_manager::has_realtime_kernel())
-    {
-      if (!controller_manager::configure_sched_fifo(THREAD_PRIORITY))
-      {
-        RCLCPP_WARN(LOGGER, "Could not enable FIFO RT scheduling policy");
-      }
-    }
-    else
-    {
-      RCLCPP_INFO(LOGGER, "RT kernel is recommended for better performance");
-    }
-    mainCalcLoop();
-  });
+  thread_ = std::thread([this] { mainCalcLoop(); });
+  // thread_ = std::thread([this] {
+  //   // Check if a realtime kernel is installed. Set a higher thread priority, if so
+  //   if (controller_manager::has_realtime_kernel())
+  //   {
+  //     if (!controller_manager::configure_sched_fifo(THREAD_PRIORITY))
+  //     {
+  //       RCLCPP_WARN(LOGGER, "Could not enable FIFO RT scheduling policy");
+  //     }
+  //   }
+  //   else
+  //   {
+  //     RCLCPP_INFO(LOGGER, "RT kernel is recommended for better performance");
+  //   }
+  //   mainCalcLoop();
+  // });
   new_input_cmd_ = false;
 }
 
@@ -521,6 +525,9 @@ void ServoCalcs::calculateSingleIteration()
       *last_sent_command_ = *joint_trajectory;
       multiarray_outgoing_cmd_pub_->publish(std::move(joints));
     }
+    auto debug_msg = std::make_unique<std_msgs::msg::Float64MultiArray>();
+    debug_msg->data = debug_data_;
+    debug_pub_->publish(std::move(debug_msg));
   }
 
   // Update the filters if we haven't yet
@@ -633,10 +640,24 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
   // Convert from cartesian commands to joint commands
   // Use an IK solver plugin if we have one, otherwise use inverse Jacobian.
   // Also use inverse Jacobian if drift dimensions are used, since IK solvers don't support them
-  bool has_delta_theta = false;
-  if (!use_inv_jacobian
-      && drift_dimensions_[3] && drift_dimensions_[4] && drift_dimensions_[5]  // IK is position only (TODO: check for that)
-  )
+
+  Eigen::MatrixXd jacobian_full = current_state_->getJacobian(joint_model_group_);
+  Eigen::MatrixXd jacobian = jacobian_full;
+  Eigen::VectorXd delta_x_full = delta_x;
+
+  double delta_x_norm_weighted = 0;
+  for (size_t i = 0; i < drift_dimensions_.size(); i++)
+    if (!drift_dimensions_[i]) {
+      double dim = delta_x_full[i]*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
+      delta_x_norm_weighted += dim*dim;
+    }
+  delta_x_norm_weighted = sqrt(delta_x_norm_weighted);
+  double best_score = std::numeric_limits<double>::infinity();
+  auto robot_state = *current_state_;
+  double score_lookahead_interval = (parameters_->ik_lookahead_seconds + parameters_->publish_period) / parameters_->publish_period / 2;
+  std::string solution_name = "";
+
+  if (!use_inv_jacobian)
   {
     double lookahead_interval = parameters_->ik_lookahead_seconds / parameters_->publish_period;
     // get a transformation matrix with the desired position change &
@@ -646,10 +667,17 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
     tf_pos_delta.translate(Eigen::Vector3d(delta_x[0], delta_x[1], delta_x[2]) * lookahead_interval);
 
     Eigen::Isometry3d tf_rot_delta(Eigen::Isometry3d::Identity());
-    Eigen::Quaterniond q = Eigen::AngleAxisd(delta_x[3] * lookahead_interval, Eigen::Vector3d::UnitX()) *
-                           Eigen::AngleAxisd(delta_x[4] * lookahead_interval, Eigen::Vector3d::UnitY()) *
-                           Eigen::AngleAxisd(delta_x[5] * lookahead_interval, Eigen::Vector3d::UnitZ());
+    // Eigen::Quaterniond q = Eigen::AngleAxisd(delta_x[3] * lookahead_interval, Eigen::Vector3d::UnitX()) *
+    //                        Eigen::AngleAxisd(delta_x[4] * lookahead_interval, Eigen::Vector3d::UnitY()) *
+    //                        Eigen::AngleAxisd(delta_x[5] * lookahead_interval, Eigen::Vector3d::UnitZ());
+    Eigen::Vector3d delta_rot;
+    delta_rot << delta_x[3], delta_x[4], delta_x[5];
+    double angle = delta_rot.norm();
+    Eigen::Vector3d axis = angle == 0 ? Eigen::Vector3d(Eigen::Vector3d::UnitZ()) : Eigen::Vector3d(delta_rot/angle);
+    Eigen::Quaterniond q(Eigen::AngleAxisd(angle * lookahead_interval, axis));
     tf_rot_delta.rotate(q);
+
+    removeDriftDimensions(jacobian, delta_x);
 
     // Poses passed to IK solvers are assumed to be in some tip link (usually EE) reference frame
     // First, find the new tip link position without newly applied rotation
@@ -680,6 +708,9 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
     moveit_msgs::msg::MoveItErrorCodes err;
     kinematics::KinematicsQueryOptions opts;
     opts.return_approximate_solution = true;
+    const ik_common::DynamicallyAdjustableIK *daik = dynamic_cast<const ik_common::DynamicallyAdjustableIK *>(ik_solver_.get());
+    if (daik)
+      daik->setOrientationVsPositionWeight(parameters_->ik_rotation_error_multiplier);
     if (ik_solver_->searchPositionIK(next_pose, internal_joint_state_.position, parameters_->publish_period / 2.0,
                                      solution, err, opts))
     {
@@ -688,159 +719,116 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       {
         delta_theta_.coeffRef(i) = (solution.at(i) - internal_joint_state_.position.at(i))/lookahead_interval;
       }
+      
+      // // for debug logging only //
+      // robot_state.setJointGroupPositions(joint_model_group_, solution);
+      // auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+      //                       robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+      // RCLCPP_INFO_STREAM(LOGGER,
+      //   "orig_theta\n" << internal_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+      //   "\ntrans\n" << tf_pos_delta.matrix() << "\nrot\n" << tf_rot_delta.matrix() << "\nnext_pose\n" << tf.matrix() <<
+      //   "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix() << "\ndelta_theta\n" << delta_theta_ <<
+      //   "\naxis\n" << axis << "\nangle: " << angle * lookahead_interval);
+      // ////////////////////////////
 
-      auto next_state = *current_state_;
-      next_state.setJointGroupPositions(joint_model_group_, solution);
-      auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                            next_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
-      RCLCPP_INFO_STREAM(LOGGER,
-        "orig_theta\n" << internal_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
-        "\ntrans\n" << tf_pos_delta.matrix() << "\nrot\n" << tf_rot_delta.matrix() << "\nnext_pose\n" << tf.matrix() <<
-        "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix());
-      has_delta_theta = true;
+      // if (Eigen::VectorXd(delta_theta_).norm() >= parameters_->publish_period*0.05) {
+      double direction_error;
+      best_score = solutionScore(
+            delta_theta_, delta_x, delta_x_norm_weighted, jacobian_full, robot_state, score_lookahead_interval, "IK", &direction_error);
+      // RCLCPP_INFO(LOGGER, "dir error: %lf, factor: %lf", direction_error, pow(1 + direction_error, parameters_->ik_direction_error_slowdown_factor));
+      delta_theta_ /= pow(1 + direction_error, parameters_->ik_direction_error_slowdown_factor);
+      solution_name = "IK";
+      // }
     }
     else
     {
       RCLCPP_WARN(LOGGER, "Could not find IK solution for requested motion, got error code %d", err.val);
       // RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 500, "Could not find IK solution for requested motion, got error code %d", err.val);
     }
-  }
 
-  Eigen::MatrixXd jacobian_full = current_state_->getJacobian(joint_model_group_);
-  Eigen::MatrixXd jacobian = jacobian_full;
-  Eigen::VectorXd delta_x_full = delta_x;
-  removeDriftDimensions(jacobian, delta_x);
+    if (daik && drift_dimensions_[3] && drift_dimensions_[4] && drift_dimensions_[5]) {
+      daik->setOrientationVsPositionWeight(0);
+      if (ik_solver_->searchPositionIK(next_pose, internal_joint_state_.position, parameters_->publish_period / 2.0,
+                                     solution, err, opts))
+      {
+        Eigen::VectorXd delta_theta_pos(jacobian.cols());
+        // find the difference in joint positions that will get us to the desired pose
+        for (size_t i = 0; i < num_joints_; ++i)
+        {
+          delta_theta_pos.coeffRef(i) = (solution.at(i) - internal_joint_state_.position.at(i))/lookahead_interval;
+        }
+
+        // // for debug logging only //
+        // robot_state.setJointGroupPositions(joint_model_group_, solution);
+        // auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+        //                       robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+        // RCLCPP_INFO_STREAM(LOGGER,
+        //   "orig_theta\n" << internal_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+        //   "\ntrans\n" << tf_pos_delta.matrix() << "\nrot\n" << tf_rot_delta.matrix() << "\nnext_pose\n" << tf.matrix() <<
+        //   "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix());
+        // ////////////////////////////
+
+        // if (delta_theta_pos.norm() >= parameters_->publish_period*0.05) {
+        bool using_ikp = true;
+        if (std::isfinite(best_score)) {
+          double direction_error;
+          double ikp_score = solutionScore(
+                delta_theta_pos, delta_x, delta_x_norm_weighted, jacobian_full, robot_state, score_lookahead_interval, "IKP", &direction_error);
+          delta_theta_pos /= pow(1 + direction_error, parameters_->ik_direction_error_slowdown_factor);
+          if (ikp_score < best_score)
+            best_score = ikp_score;
+          else
+            using_ikp = false;
+        }
+        if (using_ikp) {
+          delta_theta_ = delta_theta_pos;
+          solution_name = "IK POSITIONAL";
+        }
+        // }
+      }
+      else
+      {
+        RCLCPP_WARN(LOGGER, "Could not find IKP solution for requested motion, got error code %d", err.val);
+        // RCLCPP_WARN_THROTTLE(LOGGER, *node_->get_clock(), 500, "Could not find IK solution for requested motion, got error code %d", err.val);
+      }
+    }
+  }
+  else
+    removeDriftDimensions(jacobian, delta_x);
 
   Eigen::JacobiSVD<Eigen::MatrixXd> svd =
       Eigen::JacobiSVD<Eigen::MatrixXd>(jacobian, Eigen::ComputeThinU | Eigen::ComputeThinV);
   Eigen::MatrixXd matrix_s = svd.singularValues().asDiagonal();
   Eigen::MatrixXd pseudo_inverse = svd.matrixV() * matrix_s.inverse() * svd.matrixU().transpose();
 
-  bool using_jacobi = false;
-  if (!has_delta_theta) {
-    // no supported IK plugin, use inverse Jacobian
-    using_jacobi = true;
-    delta_theta_ = pseudo_inverse * delta_x;
-    delta_theta_ *= velocityScalingFactorForSingularity(joint_model_group_, delta_x, svd, pseudo_inverse,
-                                                    parameters_->hard_stop_singularity_threshold,
-                                                    parameters_->lower_singularity_threshold,
-                                                    parameters_->leaving_singularity_threshold_multiplier,
-                                                    *node_->get_clock(), current_state_, status_);
-  }
-  else if (std::find(drift_dimensions_.begin(), drift_dimensions_.end(), true) != drift_dimensions_.end()) {
+  bool using_jacobi = true;
+  {
     // in case of active drift_dimensions we will compare quality of the IK solution against the pseudo_inverse approach and pick the better solution
-    double delta_x_sqared_norm = delta_x.squaredNorm();
-    auto next_state = *current_state_;
-    double lookahead_interval = 1;  // (parameters_->ik_lookahead_seconds + parameters_->publish_period) / parameters_->publish_period / 2;
-    // IK
-    double ik_score_drift = 1 - velocityScalingFactorForDriftDimensions(delta_theta_, jacobian_full, drift_dimensions_,
-                                                                parameters_->drift_speed_correction_drifting_dimension_multipliers,
-                                                                parameters_->drift_speed_correction_nondrifting_dimension_multipliers,
-                                                                1);
-    double limits_scale_ik = velocityLimitsScalingFactor(joint_model_group_, delta_theta_);
-    RCLCPP_INFO_STREAM(LOGGER, "delta_theta_ik_orig\n" << delta_theta_ <<
-      "\nlimits scale " << limits_scale_ik);
-
-    double ik_score_nondrift = 0;
-    // Eigen::VectorXd delta_x_ik = jacobian*limits_scale_ik*Eigen::VectorXd(delta_theta_);
-    Eigen::VectorXd delta_x_ik(6);
-    {
-      auto next_position = internal_joint_state_.position;
-      for (size_t i = 0; i < next_position.size(); i++)
-        next_position[i] += delta_theta_[i]*limits_scale_ik*lookahead_interval;
-      next_state.setJointGroupPositions(joint_model_group_, next_position);
-      auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                            next_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
-      auto diff = ik_base_to_tip_frame_.inverse()*next_tip_frame;
-      RCLCPP_INFO_STREAM(LOGGER,
-        "IK next_tip_frame\n" << next_tip_frame.matrix() << "\ndiff\n" << diff.matrix());
-      auto xyz = diff.translation();
-      auto rpy = diff.rotation().eulerAngles(0, 1, 2);
-      delta_x_ik << xyz[0], xyz[1], xyz[2], rpy[0], rpy[1], rpy[2];
-      delta_x_ik /= lookahead_interval;
-    }
-    for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
-      if (!drift_dimensions_[i]) {
-        RCLCPP_INFO(LOGGER, "i %d, j %d, dxj size %d, dx size %d", (int)i, (int)j, (int)delta_x_ik.rows(), (int)delta_x.rows());
-        // double error = (delta_x_ik[j] - delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
-        double error = (delta_x_ik[i] - delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
-        RCLCPP_INFO(LOGGER, "ik error: %lf", error);
-        ik_score_nondrift += error*error;
-        j++;
-      }
-    ik_score_nondrift = sqrt(ik_score_nondrift/delta_x_sqared_norm);
-    double ik_score_theta = limits_scale_ik*Eigen::VectorXd(delta_theta_).norm();
-    double ik_score =
-      ik_score_drift*parameters_->ik_vs_jacobi_drifting_error_weight + 
-      ik_score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight +
-      ik_score_theta*parameters_->ik_vs_jacobi_theta_weight;
-    
     // Jacobi
     Eigen::VectorXd delta_theta_jacobi = pseudo_inverse * delta_x;
-    double jacobi_score_drift = 1 - velocityScalingFactorForDriftDimensions(delta_theta_jacobi, jacobian_full, drift_dimensions_,
-                                                                parameters_->drift_speed_correction_drifting_dimension_multipliers,
-                                                                parameters_->drift_speed_correction_nondrifting_dimension_multipliers,
-                                                                1);
     double singularity_scale_jacobi = velocityScalingFactorForSingularity(joint_model_group_, delta_x, svd, pseudo_inverse,
                                                     parameters_->hard_stop_singularity_threshold,
                                                     parameters_->lower_singularity_threshold,
                                                     parameters_->leaving_singularity_threshold_multiplier,
                                                     *node_->get_clock(), current_state_, status_);
-    double limits_scale_jacobi = velocityLimitsScalingFactor(joint_model_group_, delta_theta_jacobi);
-    RCLCPP_INFO_STREAM(LOGGER, "delta_theta_jacobi_orig\n" << delta_theta_jacobi <<
-      "\nsingularity_scale " << singularity_scale_jacobi << ", limits scale " << limits_scale_jacobi);
-
-    double jacobi_score_nondrift = 0;
-    // Eigen::VectorXd delta_x_jacobi = jacobian*limits_scale_jacobi*delta_theta_jacobi;
-    Eigen::VectorXd delta_x_jacobi(6);
-    {
-      auto next_position = internal_joint_state_.position;
-      for (size_t i = 0; i < next_position.size(); i++)
-        next_position[i] += delta_theta_jacobi[i]*limits_scale_jacobi*lookahead_interval;
-      next_state.setJointGroupPositions(joint_model_group_, next_position);
-      auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                            next_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
-      auto diff = ik_base_to_tip_frame_.inverse()*next_tip_frame;
-      RCLCPP_INFO_STREAM(LOGGER,
-        "J next_tip_frame\n" << next_tip_frame.matrix() << "\ndiff\n" << diff.matrix());
-      auto xyz = diff.translation();
-      auto rpy = diff.rotation().eulerAngles(0, 1, 2);
-      delta_x_jacobi << xyz[0], xyz[1], xyz[2], rpy[0], rpy[1], rpy[2];
-      delta_x_jacobi /= lookahead_interval;
+    delta_theta_jacobi *= singularity_scale_jacobi;
+    if (std::isfinite(best_score)) {
+      double jacobi_score = solutionScore(
+        delta_theta_jacobi, delta_x, delta_x_norm_weighted,
+        jacobian_full, robot_state, score_lookahead_interval, "J");
+      if (jacobi_score < best_score)
+        best_score = jacobi_score;
+      else
+        using_jacobi = false;
     }
-    for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
-      if (!drift_dimensions_[i]) {
-        RCLCPP_INFO(LOGGER, "i %d, j %d, dxj size %d, dx size %d", (int)i, (int)j, (int)delta_x_jacobi.rows(), (int)delta_x.rows());
-        // double error = (delta_x_jacobi[j] - delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
-        double error = (delta_x_jacobi[i] - delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
-        RCLCPP_INFO(LOGGER, "jacobi error: %lf", error);
-        jacobi_score_nondrift += error*error;
-        j++;
-      }
-    jacobi_score_nondrift = sqrt(jacobi_score_nondrift/delta_x_sqared_norm);
-    double jacobi_score_theta = limits_scale_ik*delta_theta_jacobi.norm();
-    double jacobi_score =
-      jacobi_score_drift*parameters_->ik_vs_jacobi_drifting_error_weight +
-      jacobi_score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight +
-      jacobi_score_theta*parameters_->ik_vs_jacobi_theta_weight;
-
-    RCLCPP_INFO_STREAM(LOGGER,
-      "delta_theta_ik\n" << delta_theta_*limits_scale_ik << "\ndelta_x_ik\n" << delta_x_ik <<
-      "\ndelta_theta_jacobi\n" << delta_theta_jacobi*limits_scale_jacobi << "\ndelta_x_jacobi\n" << delta_x_jacobi << "\ndelta_x\n" << delta_x);
-    RCLCPP_INFO(LOGGER, "\nIK %lf = %lf (%lf) + %lf (%lf) + %lf (%lf)\n J %lf = %lf (%lf) + %lf (%lf) + %lf (%lf)",
-      ik_score, ik_score_drift*parameters_->ik_vs_jacobi_drifting_error_weight, ik_score_drift,
-      ik_score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight, ik_score_nondrift,
-      ik_score_theta*parameters_->ik_vs_jacobi_theta_weight, ik_score_theta,
-      jacobi_score, jacobi_score_drift*parameters_->ik_vs_jacobi_drifting_error_weight, jacobi_score_drift,
-      jacobi_score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight, jacobi_score_nondrift,
-      jacobi_score_theta*parameters_->ik_vs_jacobi_theta_weight, jacobi_score_theta);
-    if (jacobi_score < ik_score) {
+    if (using_jacobi) {
       delta_theta_ = delta_theta_jacobi;
-      using_jacobi = true;
-      RCLCPP_INFO(LOGGER, "USING JACOBI");
+      solution_name = "JACOBI";
     }
-    else
-      RCLCPP_INFO(LOGGER, "USING IK");
+  }
+  if (solution_name != last_used_solution_source_) {
+    last_used_solution_source_ = solution_name;
+    RCLCPP_INFO(LOGGER, "USING %s", solution_name.c_str());
   }
 
   double drift_factor = velocityScalingFactorForDriftDimensions(delta_theta_, jacobian_full, drift_dimensions_,
@@ -851,7 +839,129 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
                                                                   : parameters_->drift_speed_correction_power_ik);
   delta_theta_ *= drift_factor;
   
-  return internalServoUpdate(delta_theta_, joint_trajectory, ServoType::CARTESIAN_SPACE);
+  // RCLCPP_INFO_STREAM(LOGGER, "\ndelta_theta\n" << delta_theta_);
+
+  bool success = internalServoUpdate(delta_theta_, joint_trajectory, ServoType::CARTESIAN_SPACE);
+
+  debug_data_.clear();
+  for (int i = 0; i < delta_theta_.rows(); i++)
+    debug_data_.push_back(delta_theta_[i]);
+  debug_data_.push_back(8);
+  for (int i = 0; i < delta_x_full.rows(); i++)
+    debug_data_.push_back(delta_x_full[i]);
+  debug_data_.push_back(8);
+  debug_data_.push_back(solution_name.length());
+  debug_data_.push_back(drift_factor);
+  if (!joint_trajectory.points.empty()) {
+    debug_data_.push_back(8);
+    for (auto v : joint_trajectory.points[0].velocities)
+      debug_data_.push_back(v);
+    debug_data_.push_back(8);
+    for (auto v : joint_trajectory.points[0].positions)
+      debug_data_.push_back(v);
+    debug_data_.push_back(8);
+  }
+  debug_data_.push_back(node_->now().seconds());
+
+  return success;
+}
+
+double ServoCalcs::solutionScore(
+    const Eigen::VectorXd &delta_theta, const Eigen::VectorXd &desired_delta_x, double delta_x_norm_weighted,
+    const Eigen::MatrixXd &jacobian_full, moveit::core::RobotState &robot_state, double lookahead_interval, const std::string &name,
+    double *direction_error)
+{
+  double score_drift = 1 - velocityScalingFactorForDriftDimensions(delta_theta, jacobian_full, drift_dimensions_,
+                                                                parameters_->drift_speed_correction_drifting_dimension_multipliers,
+                                                                parameters_->drift_speed_correction_nondrifting_dimension_multipliers,
+                                                                1);
+  double limits_scale = velocityLimitsScalingFactor(joint_model_group_, delta_theta);
+  // RCLCPP_INFO_STREAM(LOGGER, "delta_theta_orig\n" << delta_theta <<
+  //   "\nlimits scale " << limits_scale);
+
+  // Eigen::VectorXd delta_x = jacobian*limits_scale*Eigen::VectorXd(delta_theta);
+  Eigen::VectorXd delta_x(6);
+  double direction_error_scale = 1;
+  if (direction_error) {
+    auto next_position = internal_joint_state_.position;
+    for (size_t i = 0; i < next_position.size(); i++)
+      next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
+    robot_state.setJointGroupPositions(joint_model_group_, next_position);
+    auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+                          robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+    auto xyz = next_tip_frame.translation() - ik_base_to_tip_frame_.translation();
+    auto rodr = Eigen::AngleAxisd(ik_base_to_tip_frame_.rotation().inverse()*next_tip_frame.rotation());
+    Eigen::Vector3d axis = ik_base_to_tip_frame_.rotation()*rodr.axis();
+    double angle = rodr.angle();
+
+    delta_x << xyz[0], xyz[1], xyz[2], axis[0]*angle, axis[1]*angle, axis[2]*angle;
+    delta_x /= lookahead_interval;
+    
+    double delta_x_proj_multiplier = 0;
+    for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
+      if (!drift_dimensions_[i]) {
+        delta_x_proj_multiplier += desired_delta_x[j]*delta_x[i];
+        j++;
+      }
+    delta_x_proj_multiplier = std::abs(delta_x_proj_multiplier)/desired_delta_x.squaredNorm();
+
+    double dir_error = 0;
+    for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
+      if (!drift_dimensions_[i]) {
+        double error = (delta_x[i] - desired_delta_x[j]*delta_x_proj_multiplier)*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
+        dir_error += error*error;
+        j++;
+      }
+    dir_error = sqrt(dir_error)/(delta_x_norm_weighted*delta_x_proj_multiplier);
+    *direction_error = dir_error;
+    // RCLCPP_INFO_STREAM(LOGGER, "\ndelta_x\n" << delta_x << "\ndesired_delta_x\n" << desired_delta_x << "\nprojected\n" << desired_delta_x*delta_x_proj_multiplier << 
+    //   "\nproj: " << delta_x_proj_multiplier << "\n");
+    // RCLCPP_INFO(LOGGER, "%s dir error: %lf", name.c_str(), dir_error);
+    direction_error_scale = pow(1 + dir_error, -parameters_->ik_direction_error_slowdown_factor);
+  }
+
+  double score_nondrift = 0;
+  {
+    auto next_position = internal_joint_state_.position;
+    for (size_t i = 0; i < next_position.size(); i++)
+      next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
+    robot_state.setJointGroupPositions(joint_model_group_, next_position);
+    auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+                          robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+    auto xyz = next_tip_frame.translation() - ik_base_to_tip_frame_.translation();
+    auto rodr = Eigen::AngleAxisd(ik_base_to_tip_frame_.rotation().inverse()*next_tip_frame.rotation());
+    Eigen::Vector3d axis = ik_base_to_tip_frame_.rotation()*rodr.axis();
+    double angle = rodr.angle();
+
+    delta_x << xyz[0], xyz[1], xyz[2], axis[0]*angle, axis[1]*angle, axis[2]*angle;
+    delta_x /= lookahead_interval;
+    // RCLCPP_INFO_STREAM(LOGGER,
+    //   name << "\nnext_tip_frame\n" << next_tip_frame.matrix() << "\ncurrent_tip_frame\n" << ik_base_to_tip_frame_.matrix() << "\ndelta_x\n" << delta_x);
+  }
+  for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
+    if (!drift_dimensions_[i]) {
+      // RCLCPP_INFO(LOGGER, "i %d, j %d, dxj size %d, dx size %d", (int)i, (int)j, (int)delta_x.rows(), (int)desired_delta_x.rows());
+      // double error = (delta_x[j] - desired_delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
+      double error = (delta_x[i] - desired_delta_x[j])*parameters_->drift_speed_correction_nondrifting_dimension_multipliers[i];
+      // RCLCPP_INFO(LOGGER, "%s error: %lf", name.c_str(), error);
+      score_nondrift += error*error;
+      j++;
+    }
+  score_nondrift = sqrt(score_nondrift)/delta_x_norm_weighted;
+  double score_theta = limits_scale*direction_error_scale*Eigen::VectorXd(delta_theta).norm();
+  double score =
+    score_drift*parameters_->ik_vs_jacobi_drifting_error_weight + 
+    score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight +
+    score_theta*parameters_->ik_vs_jacobi_theta_weight;
+  
+  // RCLCPP_INFO_STREAM(LOGGER,
+  //   name << "_delta_theta\n" << delta_theta*limits_scale << "\n" << name << "_delta_x\n" << delta_x <<
+  //   "\ndesired_delta_x\n" << desired_delta_x);
+  // RCLCPP_INFO(LOGGER, "\n%s %lf = %lf (%lf) + %lf (%lf) + %lf (%lf)", name.c_str(),
+  //   score, score_drift*parameters_->ik_vs_jacobi_drifting_error_weight, score_drift,
+  //   score_nondrift*parameters_->ik_vs_jacobi_nondrifting_error_weight, score_nondrift,
+  //   score_theta*parameters_->ik_vs_jacobi_theta_weight, score_theta);
+  return score;
 }
 
 bool ServoCalcs::jointServoCalcs(const control_msgs::msg::JointJog& cmd,
@@ -955,7 +1065,7 @@ bool ServoCalcs::applyJointUpdate(const Eigen::ArrayXd& delta_theta, sensor_msgs
     joint_state.position[i] += delta_theta[i];
   }
 
-  smoother_->doSmoothing(joint_state.position);
+  // smoother_->doSmoothing(joint_state.position);
 
   for (std::size_t i = 0; i < joint_state.position.size(); ++i)
   {
