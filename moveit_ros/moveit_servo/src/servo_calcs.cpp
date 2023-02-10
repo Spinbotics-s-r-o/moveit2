@@ -1534,6 +1534,47 @@ bool ServoCalcs::resetServoStatus(const std::shared_ptr<std_srvs::srv::Empty::Re
 
 void ServoCalcs::setPaused(bool paused)
 {
+  if (!paused_ && paused) {
+    auto joint_trajectory = std::make_unique<trajectory_msgs::msg::JointTrajectory>();
+    suddenHalt(internal_joint_state_, joint_model_group_->getActiveJointModels());
+    composeJointTrajMessage(internal_joint_state_, *joint_trajectory);
+
+    // Clear out position commands if user did not request them (can cause interpolation issues)
+    if (!parameters_->publish_joint_positions)
+    {
+      joint_trajectory->points[0].positions.clear();
+    }
+    // Likewise for velocity and acceleration
+    if (!parameters_->publish_joint_velocities)
+    {
+      joint_trajectory->points[0].velocities.clear();
+    }
+    if (!parameters_->publish_joint_accelerations)
+    {
+      joint_trajectory->points[0].accelerations.clear();
+    }
+
+    // Put the outgoing msg in the right format
+    // (trajectory_msgs/JointTrajectory or std_msgs/Float64MultiArray).
+    if (parameters_->command_out_type == "trajectory_msgs/JointTrajectory")
+    {
+      // When a joint_trajectory_controller receives a new command, a stamp of 0 indicates "begin immediately"
+      // See http://wiki.ros.org/joint_trajectory_controller#Trajectory_replacement
+      joint_trajectory->header.stamp = rclcpp::Time(0);
+      *last_sent_command_ = *joint_trajectory;
+      trajectory_outgoing_cmd_pub_->publish(std::move(joint_trajectory));
+    }
+    else if (parameters_->command_out_type == "std_msgs/Float64MultiArray")
+    {
+      auto joints = std::make_unique<std_msgs::msg::Float64MultiArray>();
+      if (parameters_->publish_joint_positions && !joint_trajectory->points.empty())
+        joints->data = joint_trajectory->points[0].positions;
+      else if (parameters_->publish_joint_velocities && !joint_trajectory->points.empty())
+        joints->data = joint_trajectory->points[0].velocities;
+      *last_sent_command_ = *joint_trajectory;
+      multiarray_outgoing_cmd_pub_->publish(std::move(joints));
+    }
+  }
   paused_ = paused;
 }
 
