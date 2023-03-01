@@ -263,6 +263,11 @@ void ServoParameters::declare(const std::string& ns,
                                      ParameterDescriptorBuilder{}
                                          .type(PARAMETER_DOUBLE)
                                          .description("Start decelerating when a scene collision is this far [m]"));
+  node_parameters->declare_parameter(ns + ".leaving_collision_velocity_boost",
+                                     ParameterValue{ parameters.leaving_collision_velocity_boost },
+                                     ParameterDescriptorBuilder{}
+                                         .type(PARAMETER_DOUBLE)
+                                         .description("Velocity scale addition when going away from collision"));
 
   // Drifting speed limits
   node_parameters->declare_parameter(ns + ".drift_speed_correction_drifting_dimension_multipliers",
@@ -406,6 +411,8 @@ ServoParameters ServoParameters::get(const std::string& ns,
       node_parameters->get_parameter(ns + ".self_collision_proximity_threshold").as_double();
   parameters.scene_collision_proximity_threshold =
       node_parameters->get_parameter(ns + ".scene_collision_proximity_threshold").as_double();
+  parameters.leaving_collision_velocity_boost =
+      node_parameters->get_parameter(ns + ".leaving_collision_velocity_boost").as_double();
 
   // Drifting speed limits
   parameters.drift_speed_correction_drifting_dimension_multipliers =
@@ -524,6 +531,12 @@ std::optional<ServoParameters> ServoParameters::validate(ServoParameters paramet
   {
     RCLCPP_WARN(LOGGER, "Parameter 'self_collision_proximity_threshold' should probably be less "
                         "than or equal to 'scene_collision_proximity_threshold'. Check yaml file.");
+  }
+  if (parameters.leaving_collision_velocity_boost <= 0.)
+  {
+    RCLCPP_WARN(LOGGER, "Parameter 'leaving_collision_velocity_boost' should be "
+                        "greater than zero. Check yaml file.");
+    return std::nullopt;
   }
   if (parameters.collision_check_rate <= 0)
   {

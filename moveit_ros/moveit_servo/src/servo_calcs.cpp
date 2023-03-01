@@ -73,13 +73,15 @@ int const THREAD_PRIORITY = 40;
 // Constructor for the class that handles servoing calculations
 ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
                        const std::shared_ptr<const moveit_servo::ServoParameters>& parameters,
-                       const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor)
+                       const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
+                       const CollisionCheck & collision_checker)
   : node_(node)
   , parameters_(parameters)
   , planning_scene_monitor_(planning_scene_monitor)
   , stop_requested_(true)
   , done_stopping_(false)
   , paused_(false)
+  , collision_checker_(collision_checker)
   , robot_link_command_frame_(parameters->robot_link_command_frame)
   , smoothing_loader_("moveit_core", "online_signal_smoothing::SmoothingBaseClass")
 {
@@ -133,10 +135,10 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
       [this](const std::shared_ptr<std_srvs::srv::Empty::Request>& req,
              const std::shared_ptr<std_srvs::srv::Empty::Response>& res) { return resetServoStatus(req, res); });
 
-  // Subscribe to the collision_check topic
-  collision_velocity_scale_sub_ = node_->create_subscription<std_msgs::msg::Float64>(
-      "~/collision_velocity_scale", rclcpp::SystemDefaultsQoS(),
-      [this](const std_msgs::msg::Float64::ConstSharedPtr& msg) { return collisionVelocityScaleCB(msg); });
+//  // Subscribe to the collision_check topic
+//  collision_velocity_scale_sub_ = node_->create_subscription<std_msgs::msg::Float64>(
+//      "~/collision_velocity_scale", rclcpp::SystemDefaultsQoS(),
+//      [this](const std_msgs::msg::Float64::ConstSharedPtr& msg) { return collisionVelocityScaleCB(msg); });
 
   // Publish freshly-calculated joints to the robot.
   // Put the outgoing msg in the right format (trajectory_msgs/JointTrajectory or std_msgs/Float64MultiArray).
@@ -993,7 +995,7 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   internal_joint_state_ = original_joint_state_;
 
   // Apply collision scaling
-  double collision_scale = collision_velocity_scale_;
+  double collision_scale = collision_checker_.getCollisionVelocityScale(delta_theta);
   if (collision_scale > 0 && collision_scale < 1)
   {
     status_ = StatusCode::DECELERATE_FOR_COLLISION;

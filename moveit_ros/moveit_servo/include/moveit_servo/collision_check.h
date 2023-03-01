@@ -64,22 +64,11 @@ public:
 
   ~CollisionCheck()
   {
-    if (timer_)
-    {
-      timer_->cancel();
-    }
   }
 
-  /** \brief start the Timer that regulates collision check rate */
-  void start();
-
-  /** \brief Pause or unpause processing servo commands while keeping the timers alive */
-  void setPaused(bool paused);
+  double getCollisionVelocityScale(const Eigen::ArrayXd& delta_theta) const;
 
 private:
-  /** \brief Run one iteration of collision checking */
-  void run();
-
   /** \brief Get a read-only copy of the planning scene */
   planning_scene_monitor::LockedPlanningSceneRO getLockedPlanningSceneRO() const;
 
@@ -92,31 +81,13 @@ private:
   // Pointer to the collision environment
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
 
-  // Robot state and collision matrix from planning scene
-  std::shared_ptr<moveit::core::RobotState> current_state_;
-
-  // Scale robot velocity according to collision proximity and user-defined thresholds.
-  // I scaled exponentially (cubic power) so velocity drops off quickly after the threshold.
-  // Proximity decreasing --> decelerate
-  double velocity_scale_ = 1;
-  double self_collision_distance_ = 0;
-  double scene_collision_distance_ = 0;
-  bool collision_detected_ = false;
-  bool paused_ = false;
-
   const double self_velocity_scale_coefficient_;
   const double scene_velocity_scale_coefficient_;
 
   // collision request
   collision_detection::CollisionRequest collision_request_;
-  collision_detection::CollisionResult collision_result_;
 
   // ROS
-  rclcpp::TimerBase::SharedPtr timer_;
-  double period_;  // The loop period, in seconds
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr collision_velocity_scale_pub_;
-
-  mutable std::mutex joint_state_mutex_;
-  sensor_msgs::msg::JointState latest_joint_state_;
 };
 }  // namespace moveit_servo

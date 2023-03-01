@@ -116,6 +116,7 @@ struct ServoParameters
   double ik_lookahead_seconds{ 0.15 };
   double ik_rotation_error_multiplier{ 1.0 };
   double ik_direction_error_slowdown_factor{ 3.0 };
+  double leaving_collision_velocity_boost{ 0.3 };
 
   /**
    * Declares, reads, and validates parameters used for moveit_servo

@@ -52,8 +52,8 @@ Servo::Servo(const rclcpp::Node::SharedPtr& node, const ServoParameters::SharedC
              const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor)
   : planning_scene_monitor_{ planning_scene_monitor }
   , parameters_{ parameters }
-  , servo_calcs_{ node, parameters, planning_scene_monitor_ }
   , collision_checker_{ node, parameters, planning_scene_monitor_ }
+  , servo_calcs_{ node, parameters, planning_scene_monitor_, collision_checker_ }
 {
 }
 
@@ -70,10 +70,6 @@ void Servo::start()
 
   // Crunch the numbers in this timer
   servo_calcs_.start();
-
-  // Check collisions in this timer
-  if (parameters_->check_collisions)
-    collision_checker_.start();
 }
 
 Servo::~Servo()
@@ -84,7 +80,6 @@ Servo::~Servo()
 void Servo::setPaused(bool paused)
 {
   servo_calcs_.setPaused(paused);
-  collision_checker_.setPaused(paused);
 }
 
 bool Servo::getCommandFrameTransform(Eigen::Isometry3d& transform)

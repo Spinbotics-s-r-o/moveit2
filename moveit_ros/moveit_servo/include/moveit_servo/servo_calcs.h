@@ -67,6 +67,7 @@
 #include <moveit_servo/servo_parameters.h>
 #include <moveit_servo/status_codes.h>
 #include <moveit/online_signal_smoothing/smoothing_base_class.h>
+#include <moveit_servo/collision_check.h>
 
 namespace moveit_servo
 {
@@ -81,7 +82,8 @@ class ServoCalcs
 public:
   ServoCalcs(const rclcpp::Node::SharedPtr& node,
              const std::shared_ptr<const moveit_servo::ServoParameters>& parameters,
-             const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor);
+             const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
+             const CollisionCheck & collision_checker);
 
   ~ServoCalcs();
 
@@ -324,6 +326,8 @@ protected:
   bool joint_command_is_stale_ = false;
   bool ok_to_publish_ = false;
   double collision_velocity_scale_ = 1.0;
+
+  const CollisionCheck& collision_checker_;
 
   // Use ArrayXd type to enable more coefficient-wise operations
   Eigen::ArrayXd delta_theta_;
