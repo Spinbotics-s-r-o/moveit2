@@ -74,7 +74,7 @@ bool MoveGroupExecuteService::executeTrajectoryService(moveit_msgs::srv::Execute
   if (!context_->trajectory_execution_manager_)
   {
     ROS_ERROR_NAMED(getName(), "Cannot execute trajectory since ~allow_trajectory_execution was set to false");
-    res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
+    res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
     return true;
   }
 
@@ -89,24 +89,24 @@ bool MoveGroupExecuteService::executeTrajectoryService(moveit_msgs::srv::Execute
     {
       moveit_controller_manager::ExecutionStatus es = context_->trajectory_execution_manager_->waitForExecution();
       if (es == moveit_controller_manager::ExecutionStatus::SUCCEEDED)
-        res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
       else if (es == moveit_controller_manager::ExecutionStatus::PREEMPTED)
-        res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::PREEMPTED;
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::PREEMPTED;
       else if (es == moveit_controller_manager::ExecutionStatus::TIMED_OUT)
-        res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::TIMED_OUT;
       else
-        res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
+        res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
       ROS_INFO_STREAM_NAMED(getName(), "Execution completed: " << es.asString());
     }
     else
     {
       ROS_INFO_NAMED(getName(), "Trajectory was successfully forwarded to the controller");
-      res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+      res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
     }
   }
   else
   {
-    res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
+    res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::CONTROL_FAILED;
   }
   return true;
 }

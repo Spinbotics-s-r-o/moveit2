@@ -88,13 +88,14 @@ getShortestSolution(const std::vector<planning_interface::MotionPlanResponse>& s
                                                     [](const planning_interface::MotionPlanResponse& solution_a,
                                                        const planning_interface::MotionPlanResponse& solution_b) {
                                                       // If both solutions were successful, check which path is shorter
-                                                      if (solution_a && solution_b)
+                                                      if (solution_a.error_code_.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS
+                                                          && solution_b.error_code_.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
                                                       {
                                                         return robot_trajectory::path_length(*solution_a.trajectory_) <
                                                                robot_trajectory::path_length(*solution_b.trajectory_);
                                                       }
                                                       // If only solution a is successful, return a
-                                                      else if (solution_a)
+                                                      else if (solution_a.error_code_.val == moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
                                                       {
                                                         return true;
                                                       }
