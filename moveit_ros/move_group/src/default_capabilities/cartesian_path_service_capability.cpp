@@ -177,7 +177,7 @@ bool MoveGroupCartesianPathService::computeService(
           // time trajectory
           // \todo optionally compute timing to move the eef with constant speed
           trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
-          time_param.computeTimeStamps(rt, 1.0);
+          time_param.computeTimeStamps(rt, req->velocity_scaling_factor, req->acceleration_scaling_factor);
 
           rt.getRobotTrajectoryMsg(res->solution);
           RCLCPP_INFO(LOGGER, "Computed Cartesian path with %u points (followed %lf%% of requested trajectory)",
