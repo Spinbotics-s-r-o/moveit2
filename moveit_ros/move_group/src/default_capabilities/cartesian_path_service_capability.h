@@ -37,7 +37,7 @@
 #pragma once
 
 #include <moveit/move_group/move_group_capability.h>
-#include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <spinbot_msgs/srv/get_cartesian_path.hpp>
 #include <moveit_msgs/msg/display_trajectory.hpp>
 
 namespace move_group
@@ -51,10 +51,10 @@ public:
 
 private:
   bool computeService(const std::shared_ptr<rmw_request_id_t>& request_header,
-                      const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Request>& req,
-                      const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Response>& res);
+                      const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Request>& req,
+                      const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Response>& res);
 
-  rclcpp::Service<moveit_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
+  rclcpp::Service<spinbot_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
   rclcpp::Publisher<moveit_msgs::msg::DisplayTrajectory>::SharedPtr display_path_;
 
   bool display_computed_paths_;

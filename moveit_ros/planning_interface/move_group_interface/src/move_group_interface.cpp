@@ -53,7 +53,7 @@
 #include <moveit_msgs/action/execute_trajectory.hpp>
 #include <moveit_msgs/srv/execute_known_trajectory.hpp>
 #include <moveit_msgs/srv/query_planner_interfaces.hpp>
-#include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <spinbot_msgs/srv/get_cartesian_path.hpp>
 #include <moveit_msgs/srv/grasp_planning.hpp>
 #include <moveit_msgs/srv/get_planner_params.hpp>
 #include <moveit_msgs/srv/set_planner_params.hpp>
@@ -188,7 +188,7 @@ public:
     set_params_service_ = node_->create_client<moveit_msgs::srv::SetPlannerParams>(
         rclcpp::names::append(opt_.move_group_namespace_, move_group::SET_PLANNER_PARAMS_SERVICE_NAME), qos_default(),
         callback_group_);
-    cartesian_path_service_ = node_->create_client<moveit_msgs::srv::GetCartesianPath>(
+    cartesian_path_service_ = node_->create_client<spinbot_msgs::srv::GetCartesianPath>(
         rclcpp::names::append(opt_.move_group_namespace_, move_group::CARTESIAN_PATH_SERVICE_NAME), qos_default(),
         callback_group_);
 
@@ -967,8 +967,8 @@ public:
                               const moveit_msgs::msg::Constraints& path_constraints, bool avoid_collisions,
                               moveit_msgs::msg::MoveItErrorCodes& error_code, double velocity_scaling_factor, double acceleration_scaling_factor)
   {
-    auto req = std::make_shared<moveit_msgs::srv::GetCartesianPath::Request>();
-    moveit_msgs::srv::GetCartesianPath::Response::SharedPtr response;
+    auto req = std::make_shared<spinbot_msgs::srv::GetCartesianPath::Request>();
+    spinbot_msgs::srv::GetCartesianPath::Response::SharedPtr response;
 
     if (considered_start_state_)
       moveit::core::robotStateToRobotStateMsg(*considered_start_state_, req->start_state);
@@ -1397,7 +1397,7 @@ private:
   rclcpp::Client<moveit_msgs::srv::QueryPlannerInterfaces>::SharedPtr query_service_;
   rclcpp::Client<moveit_msgs::srv::GetPlannerParams>::SharedPtr get_params_service_;
   rclcpp::Client<moveit_msgs::srv::SetPlannerParams>::SharedPtr set_params_service_;
-  rclcpp::Client<moveit_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
+  rclcpp::Client<spinbot_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
   // rclcpp::Client<moveit_msgs::srv::GraspPlanning>::SharedPtr plan_grasps_service_;
   std::unique_ptr<moveit_warehouse::ConstraintsStorage> constraints_storage_;
   std::unique_ptr<std::thread> constraints_init_thread_;
