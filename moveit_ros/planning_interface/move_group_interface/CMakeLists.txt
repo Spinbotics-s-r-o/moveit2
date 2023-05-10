@@ -9,6 +9,7 @@ target_link_libraries(${MOVEIT_LIB_NAME} moveit_common_planning_interface_object
 ament_target_dependencies(${MOVEIT_LIB_NAME}
   moveit_core
   moveit_msgs
+  spinbot_msgs
   moveit_ros_move_group
   moveit_ros_occupancy_map_monitor
   moveit_ros_planning

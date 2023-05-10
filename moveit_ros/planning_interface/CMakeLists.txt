@@ -7,6 +7,7 @@ moveit_package()
 
 find_package(ament_cmake REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(spinbot_msgs REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_ros_planning REQUIRED)
 find_package(moveit_ros_warehouse REQUIRED)
