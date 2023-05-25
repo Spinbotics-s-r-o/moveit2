@@ -390,6 +390,8 @@ protected:
   /** \brief Convert OMPL PlannerStatus to moveit_msgs::msg::MoveItErrorCode */
   int32_t logPlannerStatus(const og::SimpleSetupPtr& ompl_simple_setup);
 
+  ompl::base::PlannerStatus termination_status_;
+
   ModelBasedPlanningContextSpecification spec_;
 
   moveit::core::RobotState complete_initial_robot_state_;

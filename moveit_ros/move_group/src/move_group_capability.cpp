@@ -145,6 +145,10 @@ std::string move_group::MoveGroupCapability::getActionResultString(const moveit_
       return "Motion plan was found but it seems to be too costly and looking around did not help.";
     case moveit_msgs::msg::MoveItErrorCodes::MOTION_PLAN_INVALIDATED_BY_ENVIRONMENT_CHANGE:
       return "Solution found but the environment changed during execution and the path was aborted";
+    case moveit_msgs::msg::MoveItErrorCodes::START_STATE_INVALID:
+      return "Invalid start state";
+    case moveit_msgs::msg::MoveItErrorCodes::GOAL_STATE_INVALID:
+      return "Invalid goal state";
     default:
       return moveit::core::error_code_to_string(error_code);
   }

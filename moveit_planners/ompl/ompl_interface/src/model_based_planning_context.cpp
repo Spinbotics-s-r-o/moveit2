@@ -539,10 +539,20 @@ ompl::base::PlannerTerminationCondition
 ompl_interface::ModelBasedPlanningContext::constructPlannerTerminationCondition(double timeout,
                                                                                 const ompl::time::point& start)
 {
+  termination_status_ = ompl::base::PlannerStatus::TIMEOUT;
+  auto goal = ompl_simple_setup_->getGoal()->as<ompl::base::GoalSampleableRegion>();
+  auto invalid_goal_condition = ompl::base::PlannerTerminationCondition([goal, this]{
+    bool terminate = !goal->couldSample();
+    if (terminate)
+      termination_status_ = ompl::base::PlannerStatus::INVALID_GOAL;
+    return terminate;
+  });
   auto it = spec_.config_.find("termination_condition");
   if (it == spec_.config_.end())
   {
-    return ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start));
+    return ob::plannerOrTerminationCondition(
+        invalid_goal_condition,
+        ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)));
   }
 
   std::string termination_string = it->second;
@@ -562,8 +572,10 @@ ompl_interface::ModelBasedPlanningContext::constructPlannerTerminationCondition(
     if (termination_and_params.size() > 1)
     {
       return ob::plannerOrTerminationCondition(
-          ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
-          ob::IterationTerminationCondition(std::stoul(termination_and_params[1])));
+          invalid_goal_condition,
+          ob::plannerOrTerminationCondition(
+            ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
+            ob::IterationTerminationCondition(std::stoul(termination_and_params[1]))));
     }
     else
     {
@@ -587,8 +599,10 @@ ompl_interface::ModelBasedPlanningContext::constructPlannerTerminationCondition(
       }
     }
     return ob::plannerOrTerminationCondition(
-        ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
-        ob::CostConvergenceTerminationCondition(ompl_simple_setup_->getProblemDefinition(), solutions_window, epsilon));
+        invalid_goal_condition,
+        ob::plannerOrTerminationCondition(
+          ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
+          ob::CostConvergenceTerminationCondition(ompl_simple_setup_->getProblemDefinition(), solutions_window, epsilon)));
   }
 #endif
   // Terminate as soon as an exact solution is found or a timeout occurs.
@@ -597,8 +611,10 @@ ompl_interface::ModelBasedPlanningContext::constructPlannerTerminationCondition(
   else if (termination_and_params[0] == "ExactSolution")
   {
     return ob::plannerOrTerminationCondition(
-        ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
-        ob::exactSolnPlannerTerminationCondition(ompl_simple_setup_->getProblemDefinition()));
+        invalid_goal_condition,
+        ob::plannerOrTerminationCondition(
+          ob::timedPlannerTerminationCondition(timeout - ompl::time::seconds(ompl::time::now() - start)),
+          ob::exactSolnPlannerTerminationCondition(ompl_simple_setup_->getProblemDefinition())));
   }
   else
   {
@@ -754,10 +770,11 @@ void ompl_interface::ModelBasedPlanningContext::postSolve()
   int iv = ompl_simple_setup_->getSpaceInformation()->getMotionValidator()->getInvalidMotionCount();
   RCLCPP_DEBUG(LOGGER, "There were %d valid motions and %d invalid motions.", v, iv);
 
-  // Debug OMPL setup and solution
-  std::stringstream debug_out;
-  ompl_simple_setup_->print(debug_out);
-  RCLCPP_DEBUG(LOGGER, "%s", rclcpp::get_c_string(debug_out.str()));
+  // commenting out, because sanityChecks() called inside print() method lasts very long (5 minutes) in case of unsuccessful plan
+//  // Debug OMPL setup and solution
+//  std::stringstream debug_out;
+//  ompl_simple_setup_->print(debug_out);
+//  RCLCPP_DEBUG(LOGGER, "%s", rclcpp::get_c_string(debug_out.str()));
 }
 
 bool ompl_interface::ModelBasedPlanningContext::solve(planning_interface::MotionPlanResponse& res)
@@ -972,7 +989,11 @@ int32_t ompl_interface::ModelBasedPlanningContext::logPlannerStatus(const og::Si
 {
   auto result = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
   ompl::base::PlannerStatus ompl_status = ompl_simple_setup->getLastPlannerStatus();
-  switch (ompl::base::PlannerStatus::StatusType(ompl_status))
+  auto status = ompl::base::PlannerStatus::StatusType(ompl_status);
+  // TIMEOUT will be thrown by any PlannerTerminationCondition. Use the real reason instead
+  if (status == ompl::base::PlannerStatus::TIMEOUT)
+    status = termination_status_;
+  switch (status)
   {
     case ompl::base::PlannerStatus::UNKNOWN:
       RCLCPP_WARN(LOGGER, "Motion planning failed for an unknown reason");
