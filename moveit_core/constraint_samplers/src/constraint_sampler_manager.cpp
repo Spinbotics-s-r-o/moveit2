@@ -95,6 +95,8 @@ ConstraintSamplerPtr ConstraintSamplerManager::selectDefaultSampler(const planni
           jc.push_back(j);
         }
       }
+      else
+        return ConstraintSamplerPtr();
     }
 
     // check if every joint is covered (constrained) by just joint samplers

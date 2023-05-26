@@ -228,21 +228,23 @@ bool JointConstraint::configure(const moveit_msgs::msg::JointConstraint& jc)
 
       if (bounds.min_position_ > joint_position_ + joint_tolerance_above_)
       {
-        joint_position_ = bounds.min_position_;
-        joint_tolerance_above_ = std::numeric_limits<double>::epsilon();
         RCLCPP_WARN(LOGGER,
-                    "Joint %s is constrained to be below the minimum bounds. "
-                    "Assuming minimum bounds instead.",
+                    "Joint %s is constrained to be below the minimum bounds. ",
+//                    "Assuming minimum bounds instead.",
                     jc.joint_name.c_str());
+        return false;
+//        joint_position_ = bounds.min_position_;
+//        joint_tolerance_above_ = std::numeric_limits<double>::epsilon();
       }
       else if (bounds.max_position_ < joint_position_ - joint_tolerance_below_)
       {
-        joint_position_ = bounds.max_position_;
-        joint_tolerance_below_ = std::numeric_limits<double>::epsilon();
         RCLCPP_WARN(LOGGER,
-                    "Joint %s is constrained to be above the maximum bounds. "
-                    "Assuming maximum bounds instead.",
+                    "Joint %s is constrained to be above the maximum bounds. ",
+//                    "Assuming maximum bounds instead.",
                     jc.joint_name.c_str());
+        return false;
+//        joint_position_ = bounds.max_position_;
+//        joint_tolerance_below_ = std::numeric_limits<double>::epsilon();
       }
     }
 
