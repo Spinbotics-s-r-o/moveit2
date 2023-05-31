@@ -132,17 +132,17 @@ moveit_msgs::msg::MotionPlanResponse MoveItPlanningPipeline::plan(
 
   // Plan motion
   auto plan_solution = planning_components->plan(plan_params);
-  if (plan_solution.error_code_.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
+  if (plan_solution.error_code.val != moveit_msgs::msg::MoveItErrorCodes::SUCCESS)
   {
-    response.error_code = plan_solution.error_code_;
+    response.error_code = plan_solution.error_code;
     return response;
   }
 
   // Transform solution into MotionPlanResponse and publish it
   moveit::core::robotStateToRobotStateMsg(*planning_components->getStartState(), response.trajectory_start);
   response.group_name = motion_plan_req.group_name;
-  plan_solution.trajectory_->getRobotTrajectoryMsg(response.trajectory);
-  response.error_code = plan_solution.error_code_;
+  plan_solution.trajectory->getRobotTrajectoryMsg(response.trajectory);
+  response.error_code = plan_solution.error_code;
 
   return response;
 }

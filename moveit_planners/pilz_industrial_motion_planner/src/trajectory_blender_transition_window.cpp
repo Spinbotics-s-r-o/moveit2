@@ -32,7 +32,7 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  *********************************************************************/
 
-#include "pilz_industrial_motion_planner/trajectory_blender_transition_window.h"
+#include <pilz_industrial_motion_planner/trajectory_blender_transition_window.h>
 
 #include <algorithm>
 #include <memory>
@@ -54,7 +54,7 @@ bool pilz_industrial_motion_planner::TrajectoryBlenderTransitionWindow::blend(
   RCLCPP_INFO(LOGGER, "Start trajectory blending using transition window.");
 
   double sampling_time = 0.;
-  if (!validateRequest(req, sampling_time, res.error_code_))
+  if (!validateRequest(req, sampling_time, res.error_code))
   {
     RCLCPP_ERROR(LOGGER, "Trajectory blend request is not valid.");
     return false;
@@ -68,7 +68,7 @@ bool pilz_industrial_motion_planner::TrajectoryBlenderTransitionWindow::blend(
   if (!searchIntersectionPoints(req, first_intersection_index, second_intersection_index))
   {
     RCLCPP_ERROR(LOGGER, "Blend radius to large.");
-    res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN;
+    res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::INVALID_MOTION_PLAN;
     return false;
   }
 
@@ -101,7 +101,7 @@ bool pilz_industrial_motion_planner::TrajectoryBlenderTransitionWindow::blend(
   {
     // LCOV_EXCL_START
     RCLCPP_INFO(LOGGER, "Failed to generate joint trajectory for blending trajectory.");
-    res.error_code_.val = error_code.val;
+    res.error_code.val = error_code.val;
     return false;
     // LCOV_EXCL_STOP
   }
@@ -134,7 +134,7 @@ bool pilz_industrial_motion_planner::TrajectoryBlenderTransitionWindow::blend(
   // adjust the time from start
   res.second_trajectory->setWayPointDurationFromPrevious(0, sampling_time);
 
-  res.error_code_.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+  res.error_code.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
   return true;
 }
 

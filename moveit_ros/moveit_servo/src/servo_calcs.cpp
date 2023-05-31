@@ -42,8 +42,8 @@
 #include <chrono>
 #include <mutex>
 
-// #include <controller_manager/realtime.hpp>
-#include <std_msgs/msg/bool.h>
+#include <realtime_tools/thread_priority.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
 
 // #include <moveit_servo/make_shared_from_pool.h> // TODO(adamp): create an issue about this
@@ -52,14 +52,16 @@
 #include <moveit_servo/utilities.h>
 #include "ik_common/dynamically_adjustable_ik.hpp"
 
+// Disable -Wold-style-cast because all _THROTTLE macros trigger this
+// It would be too noisy to disable on a per-callsite basis
+#pragma GCC diagnostic ignored "-Wold-style-cast"
+
 using namespace std::chrono_literals;  // for s, ms, etc.
 
 namespace moveit_servo
 {
 namespace
 {
-constexpr char CONDITION_TOPIC[] = "~/condition";
-
 static const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_servo.servo_calcs");
 constexpr auto ROS_LOG_THROTTLE_PERIOD = std::chrono::milliseconds(3000).count();
 static constexpr double STOPPED_VELOCITY_EPS = 1e-4;  // rad/s
@@ -79,10 +81,10 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
   , parameters_(parameters)
   , planning_scene_monitor_(planning_scene_monitor)
   , stop_requested_(true)
-  , done_stopping_(false)
   , paused_(false)
   , collision_checker_(collision_checker)
   , robot_link_command_frame_(parameters->robot_link_command_frame)
+  , override_velocity_scaling_factor_(parameters->override_velocity_scaling_factor)
   , smoothing_loader_("moveit_core", "online_signal_smoothing::SmoothingBaseClass")
 {
   // Register callback for changes in robot_link_command_frame
@@ -92,7 +94,16 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
                                                                     });
   if (!callback_success)
   {
-    throw std::runtime_error("Failed to register setParameterCallback");
+    throw std::runtime_error("Failed to register setParameterCallback for robot_link_command_frame");
+  }
+
+  // Register callback for changes in override_velocity_scaling_factor
+  callback_success = parameters_->registerSetParameterCallback(
+      parameters->ns + ".override_velocity_scaling_factor",
+      [this](const rclcpp::Parameter& parameter) { return overrideVelocityScalingFactorCallback(parameter); });
+  if (!callback_success)
+  {
+    throw std::runtime_error("Failed to register setParameterCallback for override_velocity_scaling_factor");
   }
 
   // MoveIt Setup
@@ -100,7 +111,7 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
   joint_model_group_ = current_state_->getJointModelGroup(parameters_->move_group_name);
   if (joint_model_group_ == nullptr)
   {
-    RCLCPP_ERROR_STREAM(LOGGER, "Invalid move group name: `" << parameters_->move_group_name << "`");
+    RCLCPP_ERROR_STREAM(LOGGER, "Invalid move group name: `" << parameters_->move_group_name << '`');
     throw std::runtime_error("Invalid move group name");
   }
 
@@ -129,16 +140,10 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
         return changeControlDimensions(req, res);
       });
 
-  // ROS Server to reset the status, e.g. so the arm can move again after a collision
-  reset_servo_status_ = node_->create_service<std_srvs::srv::Empty>(
-      "~/reset_servo_status",
-      [this](const std::shared_ptr<std_srvs::srv::Empty::Request>& req,
-             const std::shared_ptr<std_srvs::srv::Empty::Response>& res) { return resetServoStatus(req, res); });
-
-//  // Subscribe to the collision_check topic
-//  collision_velocity_scale_sub_ = node_->create_subscription<std_msgs::msg::Float64>(
-//      "~/collision_velocity_scale", rclcpp::SystemDefaultsQoS(),
-//      [this](const std_msgs::msg::Float64::ConstSharedPtr& msg) { return collisionVelocityScaleCB(msg); });
+  // // Subscribe to the collision_check topic
+  // collision_velocity_scale_sub_ = node_->create_subscription<std_msgs::msg::Float64>(
+  //     "~/collision_velocity_scale", rclcpp::SystemDefaultsQoS(),
+  //     [this](const std_msgs::msg::Float64::ConstSharedPtr& msg) { return collisionVelocityScaleCB(msg); });
 
   // Publish freshly-calculated joints to the robot.
   // Put the outgoing msg in the right format (trajectory_msgs/JointTrajectory or std_msgs/Float64MultiArray).
@@ -158,22 +163,22 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
   // Publish status
   status_pub_ = node_->create_publisher<std_msgs::msg::Int8>(parameters_->status_topic, rclcpp::SystemDefaultsQoS());
 
-  internal_joint_state_.name = joint_model_group_->getActiveJointModelNames();
-  num_joints_ = internal_joint_state_.name.size();
-  internal_joint_state_.position.resize(num_joints_);
-  internal_joint_state_.velocity.resize(num_joints_);
+  current_joint_state_.name = joint_model_group_->getActiveJointModelNames();
+  num_joints_ = current_joint_state_.name.size();
+  current_joint_state_.position.resize(num_joints_);
+  current_joint_state_.velocity.resize(num_joints_);
   delta_theta_.setZero(num_joints_);
 
   for (std::size_t i = 0; i < num_joints_; ++i)
   {
     // A map for the indices of incoming joint commands
-    joint_state_name_map_[internal_joint_state_.name[i]] = i;
+    joint_state_name_map_[current_joint_state_.name[i]] = i;
   }
 
   // Load the smoothing plugin
   try
   {
-    smoother_ = smoothing_loader_.createSharedInstance(parameters_->smoothing_filter_plugin_name);
+    smoother_ = smoothing_loader_.createUniqueInstance(parameters_->smoothing_filter_plugin_name);
   }
   catch (pluginlib::PluginlibException& ex)
   {
@@ -229,12 +234,14 @@ void ServoCalcs::start()
   auto initial_joint_trajectory = std::make_unique<trajectory_msgs::msg::JointTrajectory>();
   initial_joint_trajectory->header.stamp = node_->now();
   initial_joint_trajectory->header.frame_id = parameters_->planning_frame;
-  initial_joint_trajectory->joint_names = internal_joint_state_.name;
+  initial_joint_trajectory->joint_names = current_joint_state_.name;
   trajectory_msgs::msg::JointTrajectoryPoint point;
   point.time_from_start = rclcpp::Duration::from_seconds(0.0);  //parameters_->publish_period);
   if (parameters_->publish_joint_positions)
+  {
     planning_scene_monitor_->getStateMonitor()->getCurrentState()->copyJointGroupPositions(joint_model_group_,
                                                                                            point.positions);
+  }
   if (parameters_->publish_joint_velocities)
   {
     std::vector<double> velocity(num_joints_);
@@ -251,6 +258,22 @@ void ServoCalcs::start()
   last_sent_command_ = std::move(initial_joint_trajectory);
 
   current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
+  current_state_->copyJointGroupPositions(joint_model_group_, current_joint_state_.position);
+  current_state_->copyJointGroupVelocities(joint_model_group_, current_joint_state_.velocity);
+  // set previous state to same as current state for t = 0
+  previous_joint_state_ = current_joint_state_;
+
+  // Check that all links are known to the robot
+  auto check_link_is_known = [this](const std::string& frame_name) {
+    if (!current_state_->knowsFrameTransform(frame_name))
+    {
+      throw std::runtime_error{ "Unknown frame: " + frame_name };
+    }
+  };
+  check_link_is_known(parameters_->planning_frame);
+  check_link_is_known(parameters_->ee_frame_name);
+  check_link_is_known(robot_link_command_frame_);
+
   tf_moveit_to_ee_frame_ = current_state_->getGlobalLinkTransform(parameters_->planning_frame).inverse() *
                            current_state_->getGlobalLinkTransform(parameters_->ee_frame_name);
   tf_moveit_to_robot_cmd_frame_ = current_state_->getGlobalLinkTransform(parameters_->planning_frame).inverse() *
@@ -262,22 +285,22 @@ void ServoCalcs::start()
   }
 
   stop_requested_ = false;
-  thread_ = std::thread([this] { mainCalcLoop(); });
-  // thread_ = std::thread([this] {
-  //   // Check if a realtime kernel is installed. Set a higher thread priority, if so
-  //   if (controller_manager::has_realtime_kernel())
-  //   {
-  //     if (!controller_manager::configure_sched_fifo(THREAD_PRIORITY))
-  //     {
-  //       RCLCPP_WARN(LOGGER, "Could not enable FIFO RT scheduling policy");
-  //     }
-  //   }
-  //   else
-  //   {
-  //     RCLCPP_INFO(LOGGER, "RT kernel is recommended for better performance");
-  //   }
-  //   mainCalcLoop();
-  // });
+  // thread_ = std::thread([this] { mainCalcLoop(); });
+  thread_ = std::thread([this] {
+    // Check if a realtime kernel is installed. Set a higher thread priority, if so
+    if (realtime_tools::has_realtime_kernel())
+    {
+      if (!realtime_tools::configure_sched_fifo(THREAD_PRIORITY))
+      {
+        RCLCPP_WARN(LOGGER, "Could not enable FIFO RT scheduling policy");
+      }
+    }
+    else
+    {
+      RCLCPP_INFO(LOGGER, "RT kernel is recommended for better performance");
+    }
+    mainCalcLoop();
+  });
   new_input_cmd_ = false;
 }
 
@@ -331,7 +354,7 @@ void ServoCalcs::mainCalcLoop()
       rclcpp::Clock& clock = *node_->get_clock();
       RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
                                   "run_duration: " << run_duration.seconds() << " (" << parameters_->publish_period
-                                                   << ")");
+                                                   << ')');
     }
 
     // normal mode, unlock input mutex and wait for the period of the loop
@@ -356,10 +379,15 @@ void ServoCalcs::calculateSingleIteration()
   // Always update the joints and end-effector transform for 2 reasons:
   // 1) in case the getCommandFrameTransform() method is being used
   // 2) so the low-pass filters are up to date and don't cause a jump
-  updateJoints();
-
-  // Update from latest state
+  // Get the latest joint group positions
   current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
+  current_state_->copyJointGroupPositions(joint_model_group_, current_joint_state_.position);
+  current_state_->copyJointGroupVelocities(joint_model_group_, current_joint_state_.velocity);
+
+  // copy current state to temp state to use for calculating next state
+  // This is done so that current_joint_state_ is preserved and can be used as backup.
+  // All computations related to computing state q(t + dt) acts only on next_joint_state_ variable.
+  next_joint_state_ = current_joint_state_;
 
   if (latest_twist_stamped_)
     twist_stamped_cmd_ = *latest_twist_stamped_;
@@ -371,9 +399,6 @@ void ServoCalcs::calculateSingleIteration()
                              rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
   joint_command_is_stale_ = ((node_->now() - latest_joint_command_stamp_) >=
                              rclcpp::Duration::from_seconds(parameters_->incoming_command_timeout));
-
-  have_nonzero_twist_stamped_ = latest_twist_cmd_is_nonzero_;
-  have_nonzero_joint_command_ = latest_joint_cmd_is_nonzero_;
 
   // Get the transform from MoveIt planning frame to servoing command frame
   // Calculate this transform to ensure it is available via C++ API
@@ -393,16 +418,20 @@ void ServoCalcs::calculateSingleIteration()
                             current_state_->getGlobalLinkTransform(ik_solver_->getTipFrame());
   }
 
-  have_nonzero_command_ = have_nonzero_twist_stamped_ || have_nonzero_joint_command_;
-
   // Don't end this function without updating the filters
   updated_filters_ = false;
+
+  // Reflect paused status
+  if (paused_)
+  {
+    status_ = StatusCode::PAUSED;
+  }
 
   // If paused or while waiting for initial servo commands, just keep the low-pass filters up to date with current
   // joints so a jump doesn't occur when restarting
   if (wait_for_servo_commands_ || paused_)
   {
-    resetLowPassFilters(original_joint_state_);
+    resetLowPassFilters(current_joint_state_);
 
     // Check if there are any new commands with valid timestamp
     wait_for_servo_commands_ =
@@ -418,79 +447,34 @@ void ServoCalcs::calculateSingleIteration()
   auto joint_trajectory = std::make_unique<trajectory_msgs::msg::JointTrajectory>();
 
   // Prioritize cartesian servoing above joint servoing
-  // Only run commands if not stale and nonzero
-  if (have_nonzero_twist_stamped_ && !twist_command_is_stale_)
+  // Only run commands if not stale
+  if (!twist_command_is_stale_)
   {
     if (!cartesianServoCalcs(twist_stamped_cmd_, *joint_trajectory))
     {
-      resetLowPassFilters(original_joint_state_);
+      resetLowPassFilters(current_joint_state_);
       return;
     }
   }
-  else if (have_nonzero_joint_command_ && !joint_command_is_stale_)
+  else if (!joint_command_is_stale_)
   {
     if (!jointServoCalcs(joint_servo_cmd_, *joint_trajectory))
     {
-      resetLowPassFilters(original_joint_state_);
+      resetLowPassFilters(current_joint_state_);
       return;
     }
   }
-  else
-  {
-    // Joint trajectory is not populated with anything, so set it to the last positions and 0 velocity
-    *joint_trajectory = *last_sent_command_;
-    for (auto& point : joint_trajectory->points)
-    {
-      point.velocities.assign(point.velocities.size(), 0);
-    }
-  }
 
-  // Print a warning to the user if both are stale
+  // Skip servoing publication if both types of commands are stale.
   if (twist_command_is_stale_ && joint_command_is_stale_)
   {
-    filteredHalt(*joint_trajectory);
-  }
-  else
-  {
-    done_stopping_ = false;
-  }
-
-  // Skip the servoing publication if all inputs have been zero for several cycles in a row.
-  // num_outgoing_halt_msgs_to_publish == 0 signifies that we should keep republishing forever.
-  if (!have_nonzero_command_ && done_stopping_ && (parameters_->num_outgoing_halt_msgs_to_publish != 0) &&
-      (zero_velocity_count_ > parameters_->num_outgoing_halt_msgs_to_publish))
-  {
-    ok_to_publish_ = false;
-    rclcpp::Clock& clock = *node_->get_clock();
-    RCLCPP_DEBUG_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "All-zero command. Doing nothing.");
-  }
-  // Skip servoing publication if both types of commands are stale.
-  else if (twist_command_is_stale_ && joint_command_is_stale_)
-  {
-    ok_to_publish_ = false;
     rclcpp::Clock& clock = *node_->get_clock();
     RCLCPP_DEBUG_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
                                  "Skipping publishing because incoming commands are stale.");
-  }
-  else
-  {
-    ok_to_publish_ = true;
+    filteredHalt(*joint_trajectory);
   }
 
-  // Store last zero-velocity message flag to prevent superfluous warnings.
-  // Cartesian and joint commands must both be zero.
-  if (!have_nonzero_command_ && done_stopping_)
-  {
-    // Avoid overflow
-    if (zero_velocity_count_ < std::numeric_limits<int>::max())
-      ++zero_velocity_count_;
-  }
-  else
-  {
-    zero_velocity_count_ = 0;
-  }
-
-  if (ok_to_publish_ && !paused_)
+  if (!paused_)
   {
     // Clear out position commands if user did not request them (can cause interpolation issues)
     if (!parameters_->publish_joint_positions)
@@ -521,9 +505,13 @@ void ServoCalcs::calculateSingleIteration()
     {
       auto joints = std::make_unique<std_msgs::msg::Float64MultiArray>();
       if (parameters_->publish_joint_positions && !joint_trajectory->points.empty())
+      {
         joints->data = joint_trajectory->points[0].positions;
+      }
       else if (parameters_->publish_joint_velocities && !joint_trajectory->points.empty())
+      {
         joints->data = joint_trajectory->points[0].velocities;
+      }
       *last_sent_command_ = *joint_trajectory;
       multiarray_outgoing_cmd_pub_->publish(std::move(joints));
     }
@@ -534,13 +522,23 @@ void ServoCalcs::calculateSingleIteration()
 
   // Update the filters if we haven't yet
   if (!updated_filters_)
-    resetLowPassFilters(original_joint_state_);
+    resetLowPassFilters(current_joint_state_);
 }
 
 rcl_interfaces::msg::SetParametersResult ServoCalcs::robotLinkCommandFrameCallback(const rclcpp::Parameter& parameter)
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
   rcl_interfaces::msg::SetParametersResult result;
+
+  // Check that the new frame is known
+  if (!current_state_->knowsFrameTransform(parameter.as_string()))
+  {
+    RCLCPP_ERROR_STREAM(LOGGER, "Failed to change robot_link_command_frame. Passed frame '" << parameter.as_string()
+                                                                                            << "' is unknown");
+    result.successful = false;
+    return result;
+  }
+
   result.successful = true;
   robot_link_command_frame_ = parameter.as_string();
   RCLCPP_INFO_STREAM(LOGGER, "robot_link_command_frame changed to: " + robot_link_command_frame_);
@@ -577,6 +575,18 @@ double velocityLimitsScalingFactor(const moveit::core::JointModelGroup* joint_mo
 }
 
 }  // namespace
+
+rcl_interfaces::msg::SetParametersResult
+ServoCalcs::overrideVelocityScalingFactorCallback(const rclcpp::Parameter& parameter)
+{
+  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  override_velocity_scaling_factor_ = parameter.as_double();
+  RCLCPP_INFO_STREAM(LOGGER, "override_velocity_scaling_factor changed to: "
+                                 << std::to_string(override_velocity_scaling_factor_));
+  return result;
+};
 
 // Perform the servoing calculations
 bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
@@ -713,13 +723,13 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
     const ik_common::DynamicallyAdjustableIK *daik = dynamic_cast<const ik_common::DynamicallyAdjustableIK *>(ik_solver_.get());
     if (daik)
       daik->setOrientationVsPositionWeight(parameters_->ik_rotation_error_multiplier);
-    if (ik_solver_->searchPositionIK(next_pose, internal_joint_state_.position, parameters_->publish_period / 2.0,
+    if (ik_solver_->searchPositionIK(next_pose, current_joint_state_.position, parameters_->publish_period / 2.0,
                                      solution, err, opts))
     {
       // find the difference in joint positions that will get us to the desired pose
       for (size_t i = 0; i < num_joints_; ++i)
       {
-        delta_theta_.coeffRef(i) = (solution.at(i) - internal_joint_state_.position.at(i))/lookahead_interval;
+        delta_theta_.coeffRef(i) = (solution.at(i) - current_joint_state_.position.at(i))/lookahead_interval;
       }
       
       // // for debug logging only //
@@ -727,7 +737,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       // auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
       //                       robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
       // RCLCPP_INFO_STREAM(LOGGER,
-      //   "orig_theta\n" << internal_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+      //   "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
       //   "\ntrans\n" << tf_pos_delta.matrix() << "\nrot\n" << tf_rot_delta.matrix() << "\nnext_pose\n" << tf.matrix() <<
       //   "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix() << "\ndelta_theta\n" << delta_theta_ <<
       //   "\naxis\n" << axis << "\nangle: " << angle * lookahead_interval);
@@ -750,14 +760,14 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
     if (daik && drift_dimensions_[3] && drift_dimensions_[4] && drift_dimensions_[5]) {
       daik->setOrientationVsPositionWeight(0);
-      if (ik_solver_->searchPositionIK(next_pose, internal_joint_state_.position, parameters_->publish_period / 2.0,
+      if (ik_solver_->searchPositionIK(next_pose, current_joint_state_.position, parameters_->publish_period / 2.0,
                                      solution, err, opts))
       {
         Eigen::VectorXd delta_theta_pos(jacobian.cols());
         // find the difference in joint positions that will get us to the desired pose
         for (size_t i = 0; i < num_joints_; ++i)
         {
-          delta_theta_pos.coeffRef(i) = (solution.at(i) - internal_joint_state_.position.at(i))/lookahead_interval;
+          delta_theta_pos.coeffRef(i) = (solution.at(i) - current_joint_state_.position.at(i))/lookahead_interval;
         }
 
         // // for debug logging only //
@@ -765,7 +775,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
         // auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
         //                       robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
         // RCLCPP_INFO_STREAM(LOGGER,
-        //   "orig_theta\n" << internal_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+        //   "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
         //   "\ntrans\n" << tf_pos_delta.matrix() << "\nrot\n" << tf_rot_delta.matrix() << "\nnext_pose\n" << tf.matrix() <<
         //   "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix());
         // ////////////////////////////
@@ -885,7 +895,7 @@ double ServoCalcs::solutionScore(
   Eigen::VectorXd delta_x(6);
   double direction_error_scale = 1;
   if (direction_error) {
-    auto next_position = internal_joint_state_.position;
+    auto next_position = current_joint_state_.position;
     for (size_t i = 0; i < next_position.size(); i++)
       next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
     robot_state.setJointGroupPositions(joint_model_group_, next_position);
@@ -924,7 +934,7 @@ double ServoCalcs::solutionScore(
 
   double score_nondrift = 0;
   {
-    auto next_position = internal_joint_state_.position;
+    auto next_position = current_joint_state_.position;
     for (size_t i = 0; i < next_position.size(); i++)
       next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
     robot_state.setJointGroupPositions(joint_model_group_, next_position);
@@ -991,9 +1001,6 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   // 4. apply velocity limits
   // 5. apply position limits. This is a higher priority than velocity limits, so check it last.
 
-  // Set internal joint state from original
-  internal_joint_state_ = original_joint_state_;
-
   // Apply collision scaling
   double collision_scale = collision_checker_.getCollisionVelocityScale(delta_theta);
   if (collision_scale > 0 && collision_scale < 1)
@@ -1010,35 +1017,36 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   }
   delta_theta *= collision_scale;
 
-  // Loop thru joints and update them, calculate velocities, and filter
-  if (!applyJointUpdate(delta_theta, internal_joint_state_))
+  // Loop through joints and update them, calculate velocities, and filter
+  if (!applyJointUpdate(*node_->get_clock(), parameters_->publish_period, delta_theta, previous_joint_state_,
+                        next_joint_state_, smoother_))
     return false;
 
   // Mark the lowpass filters as updated for this cycle
   updated_filters_ = true;
 
   // Enforce SRDF velocity limits
-  enforceVelocityLimits(joint_model_group_, parameters_->publish_period, internal_joint_state_,
-                        parameters_->override_velocity_scaling_factor);
+  enforceVelocityLimits(joint_model_group_, parameters_->publish_period, next_joint_state_,
+                        override_velocity_scaling_factor_);
 
   // Enforce SRDF position limits, might halt if needed, set prev_vel to 0
-  const auto joints_to_halt = enforcePositionLimits(internal_joint_state_);
+  const auto joints_to_halt = enforcePositionLimits(next_joint_state_);
   if (!joints_to_halt.empty())
   {
     status_ = StatusCode::JOINT_BOUND;
     if ((servo_type == ServoType::JOINT_SPACE && !parameters_->halt_all_joints_in_joint_mode) ||
         (servo_type == ServoType::CARTESIAN_SPACE && !parameters_->halt_all_joints_in_cartesian_mode))
     {
-      suddenHalt(internal_joint_state_, joints_to_halt);
+      suddenHalt(next_joint_state_, joints_to_halt);
     }
     else
     {
-      suddenHalt(internal_joint_state_, joint_model_group_->getActiveJointModels());
+      suddenHalt(next_joint_state_, joint_model_group_->getActiveJointModels());
     }
   }
 
   // compose outgoing message
-  composeJointTrajMessage(internal_joint_state_, joint_trajectory);
+  composeJointTrajMessage(next_joint_state_, joint_trajectory);
 
   // Modify the output message if we are using gazebo
   if (parameters_->use_gazebo)
@@ -1046,36 +1054,7 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
     insertRedundantPointsIntoTrajectory(joint_trajectory, gazebo_redundant_message_count_);
   }
 
-  return true;
-}
-
-bool ServoCalcs::applyJointUpdate(const Eigen::ArrayXd& delta_theta, sensor_msgs::msg::JointState& joint_state)
-{
-  // All the sizes must match
-  if (joint_state.position.size() != static_cast<std::size_t>(delta_theta.size()) ||
-      joint_state.velocity.size() != joint_state.position.size())
-  {
-    rclcpp::Clock& clock = *node_->get_clock();
-    RCLCPP_ERROR_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
-                                 "Lengths of output and increments do not match.");
-    return false;
-  }
-
-  for (std::size_t i = 0; i < joint_state.position.size(); ++i)
-  {
-    // Increment joint
-    joint_state.position[i] += delta_theta[i];
-  }
-
-  // smoother_->doSmoothing(joint_state.position);
-
-  for (std::size_t i = 0; i < joint_state.position.size(); ++i)
-  {
-    // Calculate joint velocity
-    joint_state.velocity[i] =
-        (joint_state.position.at(i) - original_joint_state_.position.at(i)) / parameters_->publish_period;
-  }
-
+  previous_joint_state_ = current_joint_state_;
   return true;
 }
 
@@ -1177,7 +1156,7 @@ ServoCalcs::enforcePositionLimits(sensor_msgs::msg::JointState& joint_state) con
     joints_names << joints_to_halt.back()->getName();
     RCLCPP_WARN_STREAM_THROTTLE(LOGGER, *node_->get_clock(), ROS_LOG_THROTTLE_PERIOD,
                                 node_->get_name()
-                                    << " " << joints_names.str() << " close to a position limit. Halting.");
+                                    << ' ' << joints_names.str() << " close to a position limit. Halting.");
   }
   return joints_to_halt;
 }
@@ -1187,33 +1166,33 @@ void ServoCalcs::filteredHalt(trajectory_msgs::msg::JointTrajectory& joint_traje
   // Prepare the joint trajectory message to stop the robot
   joint_trajectory.points.clear();
   joint_trajectory.points.emplace_back();
+  joint_trajectory.joint_names = joint_model_group_->getActiveJointModelNames();
 
   // Deceleration algorithm:
-  // Set positions to original_joint_state_
+  // Set positions to current_joint_state_
   // Filter
   // Calculate velocities
   // Check if velocities are close to zero. Round to zero, if so.
-  // Set done_stopping_ flag
-  assert(original_joint_state_.position.size() >= num_joints_);
-  joint_trajectory.points[0].positions = original_joint_state_.position;
+  assert(current_joint_state_.position.size() >= num_joints_);
+  joint_trajectory.points[0].positions = current_joint_state_.position;
   smoother_->doSmoothing(joint_trajectory.points[0].positions);
-  done_stopping_ = true;
+  bool done_stopping = true;
   if (parameters_->publish_joint_velocities)
   {
     joint_trajectory.points[0].velocities = std::vector<double>(num_joints_, 0);
     for (std::size_t i = 0; i < num_joints_; ++i)
     {
       joint_trajectory.points[0].velocities.at(i) =
-          (joint_trajectory.points[0].positions.at(i) - original_joint_state_.position.at(i)) /
+          (joint_trajectory.points[0].positions.at(i) - current_joint_state_.position.at(i)) /
           parameters_->publish_period;
       // If velocity is very close to zero, round to zero
       if (joint_trajectory.points[0].velocities.at(i) > STOPPED_VELOCITY_EPS)
       {
-        done_stopping_ = false;
+        done_stopping = false;
       }
     }
     // If every joint is very close to stopped, round velocity to zero
-    if (done_stopping_)
+    if (done_stopping)
     {
       std::fill(joint_trajectory.points[0].velocities.begin(), joint_trajectory.points[0].velocities.end(), 0);
     }
@@ -1225,7 +1204,7 @@ void ServoCalcs::filteredHalt(trajectory_msgs::msg::JointTrajectory& joint_traje
     for (std::size_t i = 0; i < num_joints_; ++i)
     {
       joint_trajectory.points[0].accelerations.at(i) =
-          (joint_trajectory.points[0].velocities.at(i) - original_joint_state_.velocity.at(i)) /
+          (joint_trajectory.points[0].velocities.at(i) - current_joint_state_.velocity.at(i)) /
           parameters_->publish_period;
     }
   }
@@ -1243,21 +1222,10 @@ void ServoCalcs::suddenHalt(sensor_msgs::msg::JointState& joint_state,
     if (joint_it != joint_state.name.cend())
     {
       const auto joint_index = std::distance(joint_state.name.cbegin(), joint_it);
-      joint_state.position.at(joint_index) = original_joint_state_.position.at(joint_index);
+      joint_state.position.at(joint_index) = current_joint_state_.position.at(joint_index);
       joint_state.velocity.at(joint_index) = 0.0;
     }
   }
-}
-
-void ServoCalcs::updateJoints()
-{
-  // Get the latest joint group positions
-  current_state_ = planning_scene_monitor_->getStateMonitor()->getCurrentState();
-  current_state_->copyJointGroupPositions(joint_model_group_, internal_joint_state_.position);
-  current_state_->copyJointGroupVelocities(joint_model_group_, internal_joint_state_.velocity);
-
-  // Cache the original joints in case they need to be reset
-  original_joint_state_ = internal_joint_state_;
 }
 
 bool ServoCalcs::checkValidCommand(const control_msgs::msg::JointJog& cmd)
@@ -1297,6 +1265,15 @@ bool ServoCalcs::checkValidCommand(const geometry_msgs::msg::TwistStamped& cmd)
                                   "Component of incoming command is >1. Skipping this datapoint.");
       return false;
     }
+  }
+
+  // Check that the command frame is known
+  if (!cmd.header.frame_id.empty() && !current_state_->knowsFrameTransform(cmd.header.frame_id))
+  {
+    rclcpp::Clock& clock = *node_->get_clock();
+    RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
+                                "Commanded frame '" << cmd.header.frame_id << "' is unknown, skipping this command");
+    return false;
   }
 
   return true;
@@ -1357,10 +1334,14 @@ Eigen::VectorXd ServoCalcs::scaleJointCommand(const control_msgs::msg::JointJog&
     }
     // Apply user-defined scaling if inputs are unitless [-1:1]
     if (parameters_->command_in_type == "unitless")
+    {
       result[c] = command.velocities[m] * parameters_->joint_scale * parameters_->publish_period;
-    // Otherwise, commands are in m/s and rad/s
+      // Otherwise, commands are in m/s and rad/s
+    }
     else if (parameters_->command_in_type == "speed_units")
+    {
       result[c] = command.velocities[m] * parameters_->publish_period;
+    }
     else
     {
       rclcpp::Clock& clock = *node_->get_clock();
@@ -1470,10 +1451,9 @@ void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSha
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
   latest_twist_stamped_ = msg;
-  latest_twist_cmd_is_nonzero_ = isNonZero(*latest_twist_stamped_.get());
 
-  if (msg.get()->header.stamp != rclcpp::Time(0.))
-    latest_twist_command_stamp_ = msg.get()->header.stamp;
+  if (msg->header.stamp != rclcpp::Time(0.))
+    latest_twist_command_stamp_ = msg->header.stamp;
 
   // notify that we have a new input
   new_input_cmd_ = true;
@@ -1484,10 +1464,9 @@ void ServoCalcs::jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& m
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
   latest_joint_cmd_ = msg;
-  latest_joint_cmd_is_nonzero_ = isNonZero(*latest_joint_cmd_.get());
 
-  if (msg.get()->header.stamp != rclcpp::Time(0.))
-    latest_joint_command_stamp_ = msg.get()->header.stamp;
+  if (msg->header.stamp != rclcpp::Time(0.))
+    latest_joint_command_stamp_ = msg->header.stamp;
 
   // notify that we have a new input
   new_input_cmd_ = true;
@@ -1496,7 +1475,7 @@ void ServoCalcs::jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& m
 
 void ServoCalcs::collisionVelocityScaleCB(const std_msgs::msg::Float64::ConstSharedPtr& msg)
 {
-  collision_velocity_scale_ = msg.get()->data;
+  collision_velocity_scale_ = msg->data;
 }
 
 void ServoCalcs::changeDriftDimensions(const std::shared_ptr<moveit_msgs::srv::ChangeDriftDimensions::Request>& req,
@@ -1527,19 +1506,12 @@ void ServoCalcs::changeControlDimensions(const std::shared_ptr<moveit_msgs::srv:
   res->success = true;
 }
 
-bool ServoCalcs::resetServoStatus(const std::shared_ptr<std_srvs::srv::Empty::Request>& /*req*/,
-                                  const std::shared_ptr<std_srvs::srv::Empty::Response>& /*res*/)
-{
-  status_ = StatusCode::NO_WARNING;
-  return true;
-}
-
 void ServoCalcs::setPaused(bool paused)
 {
   if (!paused_ && paused) {
     auto joint_trajectory = std::make_unique<trajectory_msgs::msg::JointTrajectory>();
-    suddenHalt(internal_joint_state_, joint_model_group_->getActiveJointModels());
-    composeJointTrajMessage(internal_joint_state_, *joint_trajectory);
+    suddenHalt(current_joint_state_, joint_model_group_->getActiveJointModels());
+    composeJointTrajMessage(current_joint_state_, *joint_trajectory);
 
     // Clear out position commands if user did not request them (can cause interpolation issues)
     if (!parameters_->publish_joint_positions)

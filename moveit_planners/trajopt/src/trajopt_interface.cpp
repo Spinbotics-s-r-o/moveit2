@@ -53,8 +53,8 @@
 #include <Eigen/Geometry>
 #include <unordered_map>
 
-#include "trajopt_interface/trajopt_interface.h"
-#include "trajopt_interface/problem_description.h"
+#include <trajopt_interface/trajopt_interface.h>
+#include <trajopt_interface/problem_description.h>
 
 namespace trajopt_interface
 {
@@ -77,7 +77,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
   if (!planning_scene)
   {
     ROS_ERROR_STREAM_NAMED(name_, "No planning scene initialized.");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::FAILURE;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::FAILURE;
     return false;
   }
 
@@ -105,14 +105,14 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
   if (start_joint_values.empty())
   {
     ROS_ERROR_STREAM_NAMED(name_, "Start_state is empty");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::INVALID_ROBOT_STATE;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::INVALID_ROBOT_STATE;
     return false;
   }
 
   if (not joint_model_group->satisfiesPositionBounds(start_joint_values.data()))
   {
     ROS_ERROR_STREAM_NAMED(name_, "Start state violates joint limits");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::INVALID_ROBOT_STATE;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::INVALID_ROBOT_STATE;
     return false;
   }
 
@@ -144,7 +144,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
   if (req.goal_constraints.empty())
   {
     ROS_ERROR_STREAM_NAMED("trajopt_planner", "No goal constraints specified!");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
     return false;
   }
 
@@ -163,14 +163,14 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
            !req.goal_constraints[0].orientation_constraints.empty())
   {
     ROS_ERROR_STREAM_NAMED("trajopt_planner", "position constraint is not defined");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
     return false;
   }
   else if (!req.goal_constraints[0].orientation_constraints.empty() &&
            req.goal_constraints[0].orientation_constraints.empty())
   {
     ROS_ERROR_STREAM_NAMED("trajopt_planner", "orientation constraint is not defined");
-    res.error_code_.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
+    res.error_code.val = moveit_msgs::MoveItErrorCodes::INVALID_GOAL_CONSTRAINTS;
     return false;
   }
 
@@ -178,7 +178,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
   for (auto goal_cnt : req.goal_constraints)
   {
     JointPoseTermInfoPtr joint_pos_term = std::make_shared<JointPoseTermInfo>();
-    // When using MotionPlanning Display in RViz, the created request has no name for the constriant
+    // When using MotionPlanning Display in RViz, the created request has no name for the constraint
     setJointPoseTermInfoParams(joint_pos_term, (goal_cnt.name != "") ? goal_cnt.name : "goal_tmp");
 
     trajopt::DblVec joint_goal_constraints;
@@ -227,7 +227,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
   ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.max_merit_coeff_increases: " << params_.max_merit_coeff_increases);
   ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.merit_coeff_increase_ratio: " << params_.merit_coeff_increase_ratio);
   ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.max_time: " << params_.max_time);
-  ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.merit_error_coeff: " << params_.merit_error_coeff);
+  ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.initial_merit_error_coeff: " << params_.initial_merit_error_coeff);
   ROS_DEBUG_STREAM_NAMED(name_, "trajopt_param.trust_box_size: " << params_.trust_box_size);
   ROS_DEBUG_STREAM_NAMED(name_, "problem_info.basic_info.n_steps: " << problem_info.basic_info.n_steps);
   ROS_DEBUG_STREAM_NAMED(name_, "problem_info.basic_info.dt_upper_lim: " << problem_info.basic_info.dt_upper_lim);
@@ -298,7 +298,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
     res.trajectory[0].joint_trajectory.points[i].time_from_start = ros::Duration(0.0);
   }
 
-  res.error_code_.val = moveit_msgs::MoveItErrorCodes::SUCCESS;
+  res.error_code.val = moveit_msgs::MoveItErrorCodes::SUCCESS;
   res.processing_time.push_back((ros::WallTime::now() - start_time).toSec());
 
   ROS_INFO(" ======================================= check if final state is within goal tolerances");
@@ -324,7 +324,7 @@ bool TrajOptInterface::solve(const planning_scene::PlanningSceneConstPtr& planni
     if (not constraints_are_ok)
     {
       ROS_ERROR_STREAM_NAMED("trajopt_planner", "Goal constraints are violated: " << constraint.joint_name);
-      res.error_code_.val = moveit_msgs::MoveItErrorCodes::GOAL_CONSTRAINTS_VIOLATED;
+      res.error_code.val = moveit_msgs::MoveItErrorCodes::GOAL_CONSTRAINTS_VIOLATED;
       return false;
     }
     joint_cnt_index = joint_cnt_index + 1;
@@ -362,7 +362,7 @@ void TrajOptInterface::setTrajOptParams(sco::BasicTrustRegionSQPParameters& para
   nh_.param("trajopt_param/max_merit_coeff_increases", params.max_merit_coeff_increases, 5.0);
   nh_.param("trajopt_param/merit_coeff_increase_ratio", params.merit_coeff_increase_ratio, 10.0);
   nh_.param("trajopt_param/max_time", params.max_time, static_cast<double>(INFINITY));
-  nh_.param("trajopt_param/merit_error_coeff", params.merit_error_coeff, 10.0);
+  nh_.param("trajopt_param/merit_error_coeff", params.initial_merit_error_coeff, 10.0);
   nh_.param("trajopt_param/trust_box_size", params.trust_box_size, 1e-1);
 }
 
