@@ -189,8 +189,11 @@ public:
   /** \brief Set the trajectory constraints generated from a moveit msg Constraints */
   bool setTrajectoryConstraints(const moveit_msgs::msg::TrajectoryConstraints& trajectory_constraints);
 
-  /** \brief Run a plan from start or current state to fulfill the last goal constraints provided by setGoal() using
-   * default parameters. */
+  /** \brief Set the cartesian speed limit for end effector or any other link */
+  bool limitMaxCartesianLinkSpeed(const double max_speed, const std::string& link_name);
+
+    /** \brief Run a plan from start or current state to fulfill the last goal constraints provided by setGoal() using
+     * default parameters. */
   planning_interface::MotionPlanResponse plan();
   /** \brief Run a plan from start or current state to fulfill the last goal constraints provided by setGoal() using the
    * provided PlanRequestParameters. */
@@ -237,6 +240,8 @@ private:
   std::vector<moveit_msgs::msg::Constraints> current_goal_constraints_;
   moveit_msgs::msg::Constraints current_path_constraints_;
   moveit_msgs::msg::TrajectoryConstraints current_trajectory_constraints_;
+  std::string current_cartesian_speed_limited_link_;
+  double current_max_cartesian_speed_{-1.0};
   moveit_msgs::msg::WorkspaceParameters workspace_parameters_;
   bool workspace_parameters_set_ = false;
 

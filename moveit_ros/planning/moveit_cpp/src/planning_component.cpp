@@ -103,6 +103,13 @@ bool PlanningComponent::setTrajectoryConstraints(const moveit_msgs::msg::Traject
   return true;
 }
 
+bool PlanningComponent::limitMaxCartesianLinkSpeed(const double max_speed, const std::string& link_name)
+{
+  current_cartesian_speed_limited_link_ = link_name;
+  current_max_cartesian_speed_ = max_speed;
+  return true;
+}
+
 planning_interface::MotionPlanResponse PlanningComponent::plan(const PlanRequestParameters& parameters,
                                                                planning_scene::PlanningScenePtr planning_scene)
 {
@@ -337,6 +344,8 @@ PlanningComponent::getMotionPlanRequest(const PlanRequestParameters& plan_reques
   request.goal_constraints = current_goal_constraints_;
   request.path_constraints = current_path_constraints_;
   request.trajectory_constraints = current_trajectory_constraints_;
+  request.cartesian_speed_limited_link = current_cartesian_speed_limited_link_;
+  request.max_cartesian_speed = current_max_cartesian_speed_;
 
   // Set start state
   moveit::core::RobotStatePtr start_state = considered_start_state_;
