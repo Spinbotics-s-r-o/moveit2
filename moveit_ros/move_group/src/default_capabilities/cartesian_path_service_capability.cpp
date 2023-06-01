@@ -46,6 +46,7 @@
 #include <moveit/robot_state/cartesian_interpolator.h>
 #include <moveit_msgs/msg/display_trajectory.hpp>
 #include <moveit/trajectory_processing/time_optimal_trajectory_generation.h>
+#include <moveit/trajectory_processing/limit_cartesian_speed.h>
 
 namespace
 {
@@ -75,20 +76,20 @@ void MoveGroupCartesianPathService::initialize()
   display_path_ = context_->moveit_cpp_->getNode()->create_publisher<moveit_msgs::msg::DisplayTrajectory>(
       planning_pipeline::PlanningPipeline::DISPLAY_PATH_TOPIC, 10);
 
-  cartesian_path_service_ = context_->moveit_cpp_->getNode()->create_service<spinbot_msgs::srv::GetCartesianPath>(
+  cartesian_path_service_ = context_->moveit_cpp_->getNode()->create_service<moveit_msgs::srv::GetCartesianPath>(
 
       CARTESIAN_PATH_SERVICE_NAME,
       [this](const std::shared_ptr<rmw_request_id_t>& req_id,
-             const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Request>& req,
-             const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Response>& res) -> bool {
+             const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Request>& req,
+             const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Response>& res) -> bool {
         return computeService(req_id, req, res);
       });
 }
 
 bool MoveGroupCartesianPathService::computeService(
     const std::shared_ptr<rmw_request_id_t>& /* unused */,
-    const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Request>& req,
-    const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Response>& res)
+    const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Request>& req,
+    const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Response>& res)
 {
   RCLCPP_INFO(LOGGER, "Received request to compute Cartesian path");
   context_->planning_scene_monitor_->updateFrameTransforms();
@@ -179,9 +180,15 @@ bool MoveGroupCartesianPathService::computeService(
             rt.addSuffixWayPoint(traj_state, 0.0);
 
           // time trajectory
-          // \todo optionally compute timing to move the eef with constant speed
           trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
-          time_param.computeTimeStamps(rt, req->velocity_scaling_factor, req->acceleration_scaling_factor);
+          time_param.computeTimeStamps(rt, req->max_velocity_scaling_factor, req->max_acceleration_scaling_factor);
+
+          // optionally compute timing to move the eef with constant speed
+          if (req->max_cartesian_speed > 0.0)
+          {
+            trajectory_processing::limitMaxCartesianLinkSpeed(rt, req->max_cartesian_speed,
+                                                              req->cartesian_speed_limited_link);
+          }
 
           rt.getRobotTrajectoryMsg(res->solution);
           RCLCPP_INFO(LOGGER, "Computed Cartesian path with %u points (followed %lf%% of requested trajectory)",

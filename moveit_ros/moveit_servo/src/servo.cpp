@@ -48,38 +48,35 @@ const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_servo.servo");
 constexpr double ROBOT_STATE_WAIT_TIME = 10.0;  // seconds
 }  // namespace
 
-Servo::Servo(const rclcpp::Node::SharedPtr& node, const ServoParameters::SharedConstPtr& parameters,
-             const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor)
-  : planning_scene_monitor_{ planning_scene_monitor }
-  , parameters_{ parameters }
-  , collision_checker_{ node, parameters, planning_scene_monitor_ }
-  , servo_calcs_{ node, parameters, planning_scene_monitor_, collision_checker_ }
+Servo::Servo(const rclcpp::Node::SharedPtr& node,
+             const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
+             const std::shared_ptr<const servo::ParamListener>& servo_param_listener)
+  : servo_param_listener_(servo_param_listener)
+  , servo_params_{ servo_param_listener_->get_params() }
+  , planning_scene_monitor_{ planning_scene_monitor }
+  , collision_checker_{ node, planning_scene_monitor_, servo_param_listener_ }
+  , servo_calcs_{ node, planning_scene_monitor_, servo_param_listener_, collision_checker_ }
 {
 }
 
 void Servo::start()
 {
-  if (!planning_scene_monitor_->getStateMonitor()->waitForCompleteState(parameters_->move_group_name,
+  if (!planning_scene_monitor_->getStateMonitor()->waitForCompleteState(servo_params_.move_group_name,
                                                                         ROBOT_STATE_WAIT_TIME))
   {
     RCLCPP_ERROR(LOGGER, "Timeout waiting for current state");
     return;
   }
 
-  setPaused(false);
+  servo_params_ = servo_param_listener_->get_params();
 
   // Crunch the numbers in this timer
   servo_calcs_.start();
 }
 
-Servo::~Servo()
+void Servo::stop()
 {
-  setPaused(true);
-}
-
-void Servo::setPaused(bool paused)
-{
-  servo_calcs_.setPaused(paused);
+  servo_calcs_.stop();
 }
 
 bool Servo::getCommandFrameTransform(Eigen::Isometry3d& transform)
@@ -101,10 +98,4 @@ bool Servo::getEEFrameTransform(geometry_msgs::msg::TransformStamped& transform)
 {
   return servo_calcs_.getEEFrameTransform(transform);
 }
-
-const ServoParameters::SharedConstPtr& Servo::getParameters() const
-{
-  return parameters_;
-}
-
 }  // namespace moveit_servo

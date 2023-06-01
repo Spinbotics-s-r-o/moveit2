@@ -52,7 +52,7 @@
 #include <moveit/robot_state/conversions.h>
 #include <moveit_msgs/action/execute_trajectory.hpp>
 #include <moveit_msgs/srv/query_planner_interfaces.hpp>
-#include <spinbot_msgs/srv/get_cartesian_path.hpp>
+#include <moveit_msgs/srv/get_cartesian_path.hpp>
 #include <moveit_msgs/srv/grasp_planning.hpp>
 #include <moveit_msgs/srv/get_planner_params.hpp>
 #include <moveit_msgs/srv/set_planner_params.hpp>
@@ -150,6 +150,7 @@ public:
     goal_orientation_tolerance_ = 1e-3;  // ~0.1 deg
     allowed_planning_time_ = 5.0;
     num_planning_attempts_ = 1;
+    max_cartesian_speed_ = 0.0;
     node_->get_parameter_or<double>("robot_description_planning.default_velocity_scaling_factor",
                                     max_velocity_scaling_factor_, 0.1);
     node_->get_parameter_or<double>("robot_description_planning.default_acceleration_scaling_factor",
@@ -187,7 +188,7 @@ public:
     set_params_service_ = node_->create_client<moveit_msgs::srv::SetPlannerParams>(
         rclcpp::names::append(opt_.move_group_namespace, move_group::SET_PLANNER_PARAMS_SERVICE_NAME), qos_default(),
         callback_group_);
-    cartesian_path_service_ = node_->create_client<spinbot_msgs::srv::GetCartesianPath>(
+    cartesian_path_service_ = node_->create_client<moveit_msgs::srv::GetCartesianPath>(
         rclcpp::names::append(opt_.move_group_namespace, move_group::CARTESIAN_PATH_SERVICE_NAME), qos_default(),
         callback_group_);
 
@@ -386,6 +387,18 @@ public:
     {
       variable = target_value;
     }
+  }
+
+  void limitMaxCartesianLinkSpeed(const double max_speed, const std::string& link_name)
+  {
+    cartesian_speed_limited_link_ = link_name;
+    max_cartesian_speed_ = max_speed;
+  }
+
+  void clearMaxCartesianLinkSpeed()
+  {
+    cartesian_speed_limited_link_ = "";
+    max_cartesian_speed_ = 0.0;
   }
 
   moveit::core::RobotState& getTargetRobotState()
@@ -976,8 +989,8 @@ public:
                               const moveit_msgs::msg::Constraints& path_constraints, bool avoid_collisions,
                               moveit_msgs::msg::MoveItErrorCodes& error_code, double velocity_scaling_factor, double acceleration_scaling_factor)
   {
-    auto req = std::make_shared<spinbot_msgs::srv::GetCartesianPath::Request>();
-    spinbot_msgs::srv::GetCartesianPath::Response::SharedPtr response;
+    auto req = std::make_shared<moveit_msgs::srv::GetCartesianPath::Request>();
+    moveit_msgs::srv::GetCartesianPath::Response::SharedPtr response;
 
     if (considered_start_state_)
     {
@@ -997,8 +1010,10 @@ public:
     req->path_constraints = path_constraints;
     req->avoid_collisions = avoid_collisions;
     req->link_name = getEndEffectorLink();
-    req->velocity_scaling_factor = velocity_scaling_factor;
-    req->acceleration_scaling_factor = acceleration_scaling_factor;
+    req->max_velocity_scaling_factor = max_velocity_scaling_factor_;
+    req->max_acceleration_scaling_factor = max_acceleration_scaling_factor_;
+    req->cartesian_speed_limited_link = cartesian_speed_limited_link_;
+    req->max_cartesian_speed = max_cartesian_speed_;
 
     auto future_response = cartesian_path_service_->async_send_request(req);
     if (future_response.valid())
@@ -1137,6 +1152,8 @@ public:
     request.num_planning_attempts = num_planning_attempts_;
     request.max_velocity_scaling_factor = max_velocity_scaling_factor_;
     request.max_acceleration_scaling_factor = max_acceleration_scaling_factor_;
+    request.cartesian_speed_limited_link = cartesian_speed_limited_link_;
+    request.max_cartesian_speed = max_cartesian_speed_;
     request.allowed_planning_time = allowed_planning_time_;
     request.pipeline_id = planning_pipeline_id_;
     request.planner_id = planner_id_;
@@ -1399,6 +1416,8 @@ private:
   unsigned int num_planning_attempts_;
   double max_velocity_scaling_factor_;
   double max_acceleration_scaling_factor_;
+  std::string cartesian_speed_limited_link_;
+  double max_cartesian_speed_;
   double goal_joint_tolerance_;
   double goal_position_tolerance_;
   double goal_orientation_tolerance_;
@@ -1430,7 +1449,7 @@ private:
   rclcpp::Client<moveit_msgs::srv::QueryPlannerInterfaces>::SharedPtr query_service_;
   rclcpp::Client<moveit_msgs::srv::GetPlannerParams>::SharedPtr get_params_service_;
   rclcpp::Client<moveit_msgs::srv::SetPlannerParams>::SharedPtr set_params_service_;
-  rclcpp::Client<spinbot_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
+  rclcpp::Client<moveit_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
   // rclcpp::Client<moveit_msgs::srv::GraspPlanning>::SharedPtr plan_grasps_service_;
   std::unique_ptr<moveit_warehouse::ConstraintsStorage> constraints_storage_;
   std::unique_ptr<std::thread> constraints_init_thread_;
@@ -1560,6 +1579,16 @@ void MoveGroupInterface::setMaxVelocityScalingFactor(double max_velocity_scaling
 void MoveGroupInterface::setMaxAccelerationScalingFactor(double max_acceleration_scaling_factor)
 {
   impl_->setMaxAccelerationScalingFactor(max_acceleration_scaling_factor);
+}
+
+void MoveGroupInterface::limitMaxCartesianLinkSpeed(const double max_speed, const std::string& link_name)
+{
+  impl_->limitMaxCartesianLinkSpeed(max_speed, link_name);
+}
+
+void MoveGroupInterface::clearMaxCartesianLinkSpeed()
+{
+  impl_->clearMaxCartesianLinkSpeed();
 }
 
 moveit::core::MoveItErrorCode MoveGroupInterface::asyncMove()

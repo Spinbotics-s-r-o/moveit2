@@ -39,18 +39,16 @@
 #pragma once
 
 // C++
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
-#include <atomic>
 
 // ROS
 #include <control_msgs/msg/joint_jog.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <moveit/planning_scene_monitor/planning_scene_monitor.h>
 #include <moveit/robot_model_loader/robot_model_loader.h>
-#include <moveit_msgs/srv/change_drift_dimensions.hpp>
-#include <moveit_msgs/srv/change_control_dimensions.hpp>
 #include <pluginlib/class_loader.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -58,16 +56,17 @@
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/int8.hpp>
 #include <std_srvs/srv/empty.hpp>
+#include <spinbot_msgs/srv/change_drift_dimensions.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 // moveit_core
 #include <moveit/kinematics_base/kinematics_base.h>
 
 // moveit_servo
-#include <moveit_servo/servo_parameters.h>
 #include <moveit_servo/status_codes.h>
 #include <moveit/online_signal_smoothing/smoothing_base_class.h>
 #include <moveit_servo/collision_check.h>
+#include <moveit_servo_lib_parameters.hpp>
 
 namespace moveit_servo
 {
@@ -81,8 +80,8 @@ class ServoCalcs
 {
 public:
   ServoCalcs(const rclcpp::Node::SharedPtr& node,
-             const std::shared_ptr<const moveit_servo::ServoParameters>& parameters,
              const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
+             const std::shared_ptr<const servo::ParamListener>& servo_param_listener,
              const CollisionCheck & collision_checker);
 
   ~ServoCalcs();
@@ -93,6 +92,15 @@ public:
    * @exception can throw a std::runtime_error if the setup was not completed
    */
   void start();
+
+  /** \brief Stop the currently running thread */
+  void stop();
+
+  /**
+   * Check for parameter update, and apply updates if any
+   * All dynamic parameters must be checked and updated within this method
+   */
+  void updateParams();
 
   /**
    * Get the MoveIt planning link transform.
@@ -114,21 +122,12 @@ public:
   bool getEEFrameTransform(Eigen::Isometry3d& transform);
   bool getEEFrameTransform(geometry_msgs::msg::TransformStamped& transform);
 
-  /**
-   * Pause or unpause the processing of servo commands while keeping the timers alive.
-   * If paused, commands to hold the robot at its current position will continue to be published at the configured rate.
-   */
-  void setPaused(bool paused);
-
 protected:
   /** \brief Run the main calculation loop */
   void mainCalcLoop();
 
   /** \brief Do calculations for a single iteration. Publish one outgoing command */
   void calculateSingleIteration();
-
-  /** \brief Stop the currently running thread */
-  void stop();
 
   /** \brief Do servoing calculations for Cartesian twist commands. */
   bool cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
@@ -173,11 +172,6 @@ protected:
   void suddenHalt(sensor_msgs::msg::JointState& joint_state,
                   const std::vector<const moveit::core::JointModel*>& joints_to_halt) const;
 
-  /** \brief Avoid overshooting joint limits
-      \return Vector of the joints that would move farther past position margin limits
-   */
-  std::vector<const moveit::core::JointModel*> enforcePositionLimits(sensor_msgs::msg::JointState& joint_state) const;
-
   /** \brief Compose the outgoing JointTrajectory message */
   void composeJointTrajMessage(const sensor_msgs::msg::JointState& joint_state,
                                trajectory_msgs::msg::JointTrajectory& joint_trajectory);
@@ -194,11 +188,6 @@ protected:
    */
   bool internalServoUpdate(Eigen::ArrayXd& delta_theta, trajectory_msgs::msg::JointTrajectory& joint_trajectory,
                            const ServoType servo_type);
-
-  /** \brief Gazebo simulations have very strict message timestamp requirements.
-   * Satisfy Gazebo by stuffing multiple messages into one.
-   */
-  void insertRedundantPointsIntoTrajectory(trajectory_msgs::msg::JointTrajectory& joint_trajectory, int count) const;
 
   /**
    * Remove the Jacobian row and the delta-x element of one Cartesian dimension, to take advantage of task redundancy
@@ -217,13 +206,6 @@ protected:
    */
   void removeDriftDimensions(Eigen::MatrixXd& matrix, Eigen::VectorXd& delta_x);
 
-  /**
-   * Uses control_dimensions_ to set the incoming twist command values to 0 in uncontrolled directions
-   *
-   * @param command TwistStamped msg being used in the Cartesian calcs process
-   */
-  void enforceControlDimensions(geometry_msgs::msg::TwistStamped& command);
-
   /* \brief Command callbacks */
   void twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg);
   void jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& msg);
@@ -237,13 +219,8 @@ protected:
    * @param response the service response
    * @return true if the adjustment was made
    */
-  void changeDriftDimensions(const std::shared_ptr<moveit_msgs::srv::ChangeDriftDimensions::Request>& req,
-                             const std::shared_ptr<moveit_msgs::srv::ChangeDriftDimensions::Response>& res);
-
-  /** \brief Start the main calculation timer */
-  // Service callback for changing servoing dimensions
-  void changeControlDimensions(const std::shared_ptr<moveit_msgs::srv::ChangeControlDimensions::Request>& req,
-                               const std::shared_ptr<moveit_msgs::srv::ChangeControlDimensions::Response>& res);
+  void changeDriftDimensions(const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Request>& req,
+                             const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Response>& res);
 
   double solutionScore(
     const Eigen::VectorXd &delta_theta, const Eigen::VectorXd &desired_delta_x, double delta_x_norm_weighted,
@@ -253,8 +230,9 @@ protected:
   // Pointer to the ROS node
   std::shared_ptr<rclcpp::Node> node_;
 
-  // Parameters from yaml
-  const std::shared_ptr<const moveit_servo::ServoParameters> parameters_;
+  // Servo parameters
+  const std::shared_ptr<const servo::ParamListener> servo_param_listener_;
+  servo::Params servo_params_;
 
   // Pointer to the collision environment
   planning_scene_monitor::PlanningSceneMonitorPtr planning_scene_monitor_;
@@ -294,8 +272,7 @@ protected:
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr status_pub_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_outgoing_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr multiarray_outgoing_cmd_pub_;
-  rclcpp::Service<moveit_msgs::srv::ChangeControlDimensions>::SharedPtr control_dimensions_server_;
-  rclcpp::Service<moveit_msgs::srv::ChangeDriftDimensions>::SharedPtr drift_dimensions_server_;
+  rclcpp::Service<spinbot_msgs::srv::ChangeDriftDimensions>::SharedPtr drift_dimensions_server_;
 
   // Main tracking / result publisher loop
   std::thread thread_;
@@ -303,7 +280,6 @@ protected:
 
   // Status
   StatusCode status_ = StatusCode::NO_WARNING;
-  std::atomic<bool> paused_;
   bool twist_command_is_stale_ = false;
   bool joint_command_is_stale_ = false;
   double collision_velocity_scale_ = 1.0;
@@ -312,8 +288,6 @@ protected:
 
   // Use ArrayXd type to enable more coefficient-wise operations
   Eigen::ArrayXd delta_theta_;
-
-  const int gazebo_redundant_message_count_ = 30;
 
   unsigned int num_joints_;
 
@@ -336,16 +310,10 @@ protected:
   std::condition_variable input_cv_;
   bool new_input_cmd_ = false;
 
-  // dynamic parameters
-  std::string robot_link_command_frame_;
-  rcl_interfaces::msg::SetParametersResult robotLinkCommandFrameCallback(const rclcpp::Parameter& parameter);
-  double override_velocity_scaling_factor_;
-  rcl_interfaces::msg::SetParametersResult overrideVelocityScalingFactorCallback(const rclcpp::Parameter& parameter);
-
   // Load a smoothing plugin
   pluginlib::ClassLoader<online_signal_smoothing::SmoothingBaseClass> smoothing_loader_;
 
-  kinematics::KinematicsBaseConstPtr ik_solver_;
+  kinematics::KinematicsBaseConstPtr ik_solver_ = nullptr;
   Eigen::Isometry3d ik_base_to_tip_frame_;
   bool use_inv_jacobian_ = false;
 

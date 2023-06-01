@@ -7,7 +7,6 @@ target_link_libraries(moveit_move_group_interface moveit_common_planning_interfa
 ament_target_dependencies(moveit_move_group_interface
   moveit_core
   moveit_msgs
-  spinbot_msgs
   moveit_ros_move_group
   moveit_ros_occupancy_map_monitor
   moveit_ros_planning

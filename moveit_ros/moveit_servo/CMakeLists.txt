@@ -22,14 +22,17 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   tf2_eigen
   trajectory_msgs
   ik_common
+  spinbot_msgs
 )
 
 find_package(ament_cmake REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
+find_package(generate_parameter_library REQUIRED)
 foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
+find_package(spinbot_msgs REQUIRED)
 
 include_directories(
   include
@@ -40,17 +43,14 @@ include_directories(
 ###################
 
 # This library provides a way of loading parameters for servo
-add_library(moveit_servo_lib_parameters SHARED
-  src/servo_parameters.cpp
-  src/parameter_descriptor_builder.cpp
+generate_parameter_library(
+  moveit_servo_lib_parameters
+  src/servo_parameters.yaml
 )
-set_target_properties(moveit_servo_lib_parameters PROPERTIES VERSION "${moveit_servo_VERSION}")
-ament_target_dependencies(moveit_servo_lib_parameters ${THIS_PACKAGE_INCLUDE_DEPENDS})
 
 # This library provides a C++ interface for sending realtime twist or joint commands to a robot
 add_library(moveit_servo_lib SHARED
   src/collision_check.cpp
-  src/enforce_limits.cpp
   src/servo.cpp
   src/servo_calcs.cpp
   src/utilities.cpp
