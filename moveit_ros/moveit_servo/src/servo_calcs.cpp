@@ -630,12 +630,12 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       }
       
       // for debug logging only //
-      robot_state.setJointGroupPositions(joint_model_group_, solution);
-      auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                           robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
-      RCLCPP_INFO_STREAM(LOGGER,
-       "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
-       "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix() << "\ndelta_theta\n" << delta_theta_);
+//      robot_state.setJointGroupPositions(joint_model_group_, solution);
+//      auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+//                           robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+//      RCLCPP_INFO_STREAM(LOGGER,
+//       "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+//       "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix() << "\ndelta_theta\n" << delta_theta_);
       ////////////////////////////
 
       // if (Eigen::VectorXd(delta_theta_).norm() >= servo_params_.publish_period*0.05) {
@@ -643,8 +643,8 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       best_score = solutionScore(
             delta_theta_, delta_x, delta_x_norm_weighted, jacobian_full, robot_state, score_lookahead_interval, "IK", &direction_error);
       if (direction_error == direction_error) {
-        RCLCPP_INFO(LOGGER, "dir error: %lf, factor: %lf", direction_error,
-                    pow(1 + direction_error, servo_params_.ik_direction_error_slowdown_factor));
+//        RCLCPP_INFO(LOGGER, "dir error: %lf, factor: %lf", direction_error,
+//                    pow(1 + direction_error, servo_params_.ik_direction_error_slowdown_factor));
         delta_theta_ /= pow(1 + direction_error, servo_params_.ik_direction_error_slowdown_factor);
       }
       solution_name = "IK";
@@ -669,12 +669,12 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
         }
 
         // for debug logging only //
-        robot_state.setJointGroupPositions(joint_model_group_, solution);
-        auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                             robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
-        RCLCPP_INFO_STREAM(LOGGER,
-         "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
-         "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix());
+//        robot_state.setJointGroupPositions(joint_model_group_, solution);
+//        auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
+//                             robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+//        RCLCPP_INFO_STREAM(LOGGER,
+//         "orig_theta\n" << current_joint_state_.position << "\norig_x\n" << ik_base_to_tip_frame_.matrix() <<
+//         "\nsolution_theta\n" << solution << "\nsolution_x\n" << next_tip_frame.matrix());
         ////////////////////////////
 
         // if (delta_theta_pos.norm() >= servo_params_.publish_period*0.05) {
@@ -755,7 +755,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
                                                                   : servo_params_.drift_speed_correction_power_ik);
   delta_theta_ *= drift_factor;
   
-  RCLCPP_INFO_STREAM(LOGGER, "\ndelta_theta\n" << delta_theta_);
+//  RCLCPP_INFO_STREAM(LOGGER, "\ndelta_theta\n" << delta_theta_);
   bool success = internalServoUpdate(delta_theta_, joint_trajectory, ServoType::CARTESIAN_SPACE);
 
   debug_data_.clear();
@@ -791,8 +791,8 @@ double ServoCalcs::solutionScore(
                                                                 servo_params_.drift_speed_correction_nondrifting_dimension_multipliers,
                                                                 1);
   double limits_scale = velocityLimitsScalingFactor(joint_model_group_, delta_theta);
-  RCLCPP_INFO_STREAM(LOGGER, "delta_theta_orig\n" << delta_theta <<
-    "\nlimits scale " << limits_scale);
+//  RCLCPP_INFO_STREAM(LOGGER, "delta_theta_orig\n" << delta_theta <<
+//    "\nlimits scale " << limits_scale);
 
   // Eigen::VectorXd delta_x = jacobian*limits_scale*Eigen::VectorXd(delta_theta);
   Eigen::VectorXd delta_x(6);
@@ -829,9 +829,9 @@ double ServoCalcs::solutionScore(
       }
     dir_error = sqrt(dir_error)/(delta_x_norm_weighted*delta_x_proj_multiplier);
     *direction_error = dir_error;
-    RCLCPP_INFO_STREAM(LOGGER, "\ndelta_x\n" << delta_x << "\ndesired_delta_x\n" << desired_delta_x << "\nprojected\n" << desired_delta_x*delta_x_proj_multiplier <<
-      "\nproj: " << delta_x_proj_multiplier << "\n");
-    RCLCPP_INFO(LOGGER, "%s dir error: %lf", name.c_str(), dir_error);
+//    RCLCPP_INFO_STREAM(LOGGER, "\ndelta_x\n" << delta_x << "\ndesired_delta_x\n" << desired_delta_x << "\nprojected\n" << desired_delta_x*delta_x_proj_multiplier <<
+//      "\nproj: " << delta_x_proj_multiplier << "\n");
+//    RCLCPP_INFO(LOGGER, "%s dir error: %lf", name.c_str(), dir_error);
     direction_error_scale = pow(1 + dir_error, -servo_params_.ik_direction_error_slowdown_factor);
   }
 
@@ -850,15 +850,15 @@ double ServoCalcs::solutionScore(
 
     delta_x << xyz[0], xyz[1], xyz[2], axis[0]*angle, axis[1]*angle, axis[2]*angle;
     delta_x /= lookahead_interval;
-    RCLCPP_INFO_STREAM(LOGGER,
-                       name << "\nnext_tip_frame\n" << next_tip_frame.matrix() << "\ncurrent_tip_frame\n" << ik_base_to_tip_frame_.matrix() << "\ndelta_x\n" << delta_x);
+//    RCLCPP_INFO_STREAM(LOGGER,
+//                       name << "\nnext_tip_frame\n" << next_tip_frame.matrix() << "\ncurrent_tip_frame\n" << ik_base_to_tip_frame_.matrix() << "\ndelta_x\n" << delta_x);
   }
   for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
     if (!drift_dimensions_[i]) {
-      RCLCPP_INFO(LOGGER, "i %d, j %d, dxj size %d, dx size %d", (int)i, (int)j, (int)delta_x.rows(), (int)desired_delta_x.rows());
+//      RCLCPP_INFO(LOGGER, "i %d, j %d, dxj size %d, dx size %d", (int)i, (int)j, (int)delta_x.rows(), (int)desired_delta_x.rows());
       // double error = (delta_x[j] - desired_delta_x[j])*servo_params_.drift_speed_correction_nondrifting_dimension_multipliers[i];
       double error = (delta_x[i] - desired_delta_x[j])*servo_params_.drift_speed_correction_nondrifting_dimension_multipliers[i];
-      RCLCPP_INFO(LOGGER, "%s error: %lf", name.c_str(), error);
+//      RCLCPP_INFO(LOGGER, "%s error: %lf", name.c_str(), error);
       score_nondrift += error*error;
       j++;
     }
@@ -869,13 +869,13 @@ double ServoCalcs::solutionScore(
     score_nondrift*servo_params_.ik_vs_jacobi_nondrifting_error_weight +
     score_theta*servo_params_.ik_vs_jacobi_theta_weight;
   
-  RCLCPP_INFO_STREAM(LOGGER,
-    name << "_delta_theta\n" << delta_theta*limits_scale << "\n" << name << "_delta_x\n" << delta_x <<
-    "\ndesired_delta_x\n" << desired_delta_x);
-  RCLCPP_INFO(LOGGER, "\n%s %lf = %lf (%lf) + %lf (%lf) + %lf (%lf)", name.c_str(),
-    score, score_drift*servo_params_.ik_vs_jacobi_drifting_error_weight, score_drift,
-    score_nondrift*servo_params_.ik_vs_jacobi_nondrifting_error_weight, score_nondrift,
-    score_theta*servo_params_.ik_vs_jacobi_theta_weight, score_theta);
+//  RCLCPP_INFO_STREAM(LOGGER,
+//    name << "_delta_theta\n" << delta_theta*limits_scale << "\n" << name << "_delta_x\n" << delta_x <<
+//    "\ndesired_delta_x\n" << desired_delta_x);
+//  RCLCPP_INFO(LOGGER, "\n%s %lf = %lf (%lf) + %lf (%lf) + %lf (%lf)", name.c_str(),
+//    score, score_drift*servo_params_.ik_vs_jacobi_drifting_error_weight, score_drift,
+//    score_nondrift*servo_params_.ik_vs_jacobi_nondrifting_error_weight, score_nondrift,
+//    score_theta*servo_params_.ik_vs_jacobi_theta_weight, score_theta);
   return score;
 }
 
@@ -921,7 +921,7 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   delta_theta *= collision_scale;
 
   // Loop through joints and update them, calculate velocities, and filter
-  if (!applyJointUpdate(servo_params_.publish_period, delta_theta, , next_joint_state_, smoother_))
+  if (!applyJointUpdate(servo_params_.publish_period, delta_theta, current_joint_state_, next_joint_state_, smoother_))
   {
     RCLCPP_ERROR_STREAM_THROTTLE(LOGGER, *node_->get_clock(), ROS_LOG_THROTTLE_PERIOD,
                                  "Lengths of output and increments do not match.");
