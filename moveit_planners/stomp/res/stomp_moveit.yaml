@@ -52,6 +52,16 @@ stomp_moveit:
     description: "Weight of the acceleration costs to be applied for the general cost calculation. A value of 0 disables this cost.",
     default_value: 0.1,
   }
+  links_padding: {
+    type: double,
+    description: "How much each link should be padded to avoid obstacles from a safer distance",
+    default_value: 0.005,
+  }
+  collision_group: {
+    type: string,
+    description: "Which group should be used for collision checking",
+    default_value: "spinbot_gripper",
+  }
   delta_t: {
     type: double,
     description: "Assumed time change between consecutive points - used for computing control costs",

@@ -144,7 +144,7 @@ CostFn get_cost_function_from_state_validator(const StateValidatorFn& state_vali
            j <= std::min(values.cols() - 1, end + static_cast<long>(sigma)); ++j)
       {
         costs(j) +=
-            std::exp(-std::pow(j - mu, 2) / (2 * std::pow(sigma, 2))) / (sigma * std::sqrt(2 * mu)) * window_size;
+            std::exp(-std::pow(j - mu, 2) / (2 * std::pow(sigma, 2))) / (sigma * std::sqrt(2 * std::max(0.01, mu))) * window_size;
       }
     }
 
@@ -166,19 +166,19 @@ CostFn get_cost_function_from_state_validator(const StateValidatorFn& state_vali
  * @return                  Cost function that computes smooth costs for colliding path segments
  */
 CostFn get_collision_cost_function(const std::shared_ptr<const planning_scene::PlanningScene>& planning_scene,
-                                   const moveit::core::JointModelGroup* group, double collision_penalty)
+                                   const moveit::core::JointModelGroup* group, double collision_penalty, std::string collision_group)
 {
   const auto& joints = group ? group->getActiveJointModels() : planning_scene->getRobotModel()->getActiveJointModels();
   const auto& group_name = group ? group->getName() : "";
 
+  auto state = std::make_shared<moveit::core::RobotState>(planning_scene->getCurrentState());
+
   StateValidatorFn collision_validator_fn = [=](const Eigen::VectorXd& positions) {
-    static moveit::core::RobotState state(planning_scene->getCurrentState());
-
     // Update robot state values
-    set_joint_positions(positions, joints, state);
-    state.update();
+    set_joint_positions(positions, joints, *state);
+    state->update();
 
-    return !planning_scene->isStateColliding(state, group_name);
+    return !planning_scene->isStateColliding(*state, collision_group);
   };
 
   return get_cost_function_from_state_validator(collision_validator_fn, COL_CHECK_DISTANCE, collision_penalty);
@@ -202,19 +202,20 @@ CostFn get_constraints_cost_function(const std::shared_ptr<const planning_scene:
 {
   const auto& joints = group ? group->getActiveJointModels() : planning_scene->getRobotModel()->getActiveJointModels();
 
+  auto state = std::make_shared<moveit::core::RobotState>(planning_scene->getCurrentState());
+
   kinematic_constraints::KinematicConstraintSet constraints(planning_scene->getRobotModel());
   constraints.add(constraints_msg, planning_scene->getTransforms());
 
   StateValidatorFn constraints_validator_fn = [=](const Eigen::VectorXd& positions) {
-    static moveit::core::RobotState state(planning_scene->getCurrentState());
 
     // Update robot state values
-    set_joint_positions(positions, joints, state);
-    state.update();
+    set_joint_positions(positions, joints, *state);
+    state->update();
 
     // NOTE: the returned ConstraintEvaluationResult also provides a `double distance` which might be used as an
     // actual cost gradient instead of the binary state penalty
-    return constraints.decide(state).satisfied;
+    return constraints.decide(*state).satisfied;
   };
 
   return get_cost_function_from_state_validator(constraints_validator_fn, CONSTRAINT_CHECK_DISTANCE,

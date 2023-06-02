@@ -130,17 +130,17 @@ get_iteration_path_publisher(const rclcpp::Publisher<visualization_msgs::msg::Ma
     };
   }
 
-  auto path_publisher = [marker_publisher, group,
-                         reference_state = moveit::core::RobotState(planning_scene->getCurrentState())](
+  auto reference_state = moveit::core::RobotState(planning_scene->getCurrentState());
+  auto trajectory = std::make_shared<robot_trajectory::RobotTrajectory>(reference_state.getRobotModel(), group);
+  auto path_publisher = [marker_publisher, group, reference_state, trajectory](
                             int /*iteration_number*/, double /*cost*/, const Eigen::MatrixXd& values) {
-    static thread_local robot_trajectory::RobotTrajectory trajectory(reference_state.getRobotModel(), group);
-    fill_robot_trajectory(values, reference_state, trajectory);
+    fill_robot_trajectory(values, reference_state, *trajectory);
 
     const moveit::core::LinkModel* ee_parent_link = group->getOnlyOneEndEffectorTip();
 
-    if (ee_parent_link != nullptr && !trajectory.empty())
+    if (ee_parent_link != nullptr && !trajectory->empty())
     {
-      marker_publisher->publish(createTrajectoryMarkerArray(trajectory, ee_parent_link, GREEN(0.5)));
+      marker_publisher->publish(createTrajectoryMarkerArray(*trajectory, ee_parent_link, GREEN(0.5)));
     }
   };
 

@@ -64,6 +64,17 @@ public:
     parameter_namespace_ = parameter_namespace;
     param_listener_ = std::make_shared<stomp_moveit::ParamListener>(node, parameter_namespace);
 
+    // Specify for which joint model groups this planner is usable
+    planning_interface::PlannerConfigurationMap pconfig;
+    for (const auto& group : model->getJointModelGroupNames())
+    {
+      const planning_interface::PlannerConfigurationSettings planner_config_settings{
+          group, group, std::map<std::string, std::string>()
+      };
+      pconfig[planner_config_settings.name] = planner_config_settings;
+    }
+    setPlannerConfigurations(pconfig);
+
     return true;
   }
 
@@ -127,8 +138,9 @@ public:
     return true;
   }
 
-  void setPlannerConfigurations(const PlannerConfigurationMap& /*pcs*/) override
+  void setPlannerConfigurations(const PlannerConfigurationMap& pcs) override
   {
+    config_settings_ = pcs;
   }
 
 private:
