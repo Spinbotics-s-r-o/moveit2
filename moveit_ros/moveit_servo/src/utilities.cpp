@@ -145,7 +145,8 @@ bool applyJointUpdate(const double publish_period, const Eigen::ArrayXd& delta_t
   // Lambda that calculates velocity using central difference.
   // (q(t + dt) - q(t - dt)) / ( 2 * dt )
   auto compute_velocity = [&](const double next_pos, const double previous_pos) {
-    return (next_pos - previous_pos) / (2 * publish_period);
+//    return (next_pos - previous_pos) / (2 * publish_period);
+    return (next_pos - previous_pos) / publish_period;  // we're using a simpl formula: (q(t + dt) - q(t)) / ( dt )
   };
 
   // Transform that applies the lambda to all joints.
