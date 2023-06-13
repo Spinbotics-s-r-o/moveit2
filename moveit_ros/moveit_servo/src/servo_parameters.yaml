@@ -424,3 +424,12 @@ servo:
       gt<>: 0.0
     }
   }
+
+  joint_state_aligning_factor: {
+    type: double,
+    default_value: 1.0,
+    description: "How quickly should internal joint state align to the real state of robot",
+    validation: {
+      bounds<>: [0.0, 1.0],
+    }
+  }
