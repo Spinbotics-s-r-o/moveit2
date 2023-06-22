@@ -932,11 +932,12 @@ bool TimeOptimalTrajectoryGeneration::computeTimeStamps(robot_trajectory::RobotT
     }
     else
     {
-      RCLCPP_ERROR_STREAM(LOGGER, "No acceleration limit was defined for joint "
+
+      RCLCPP_WARN_STREAM(LOGGER, "No acceleration limit was defined for joint "
                                       << vars[idx].c_str()
-                                      << "! You have to define acceleration limits in the URDF or "
-                                         "joint_limits.yaml");
-      return false;
+                                      << "! You should define acceleration limits in "
+                                         "joint_limits.yaml. Assuming that any velocity can be reached instantly (acc_limit = 1e9)");
+      max_acceleration[idx] = 1e9 * acceleration_scaling_factor;
     }
   }
 
