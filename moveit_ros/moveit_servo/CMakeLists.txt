@@ -23,6 +23,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   trajectory_msgs
   ik_common
   spinbot_msgs
+  yaml-cpp
 )
 
 find_package(ament_cmake REQUIRED)
@@ -57,7 +58,7 @@ add_library(moveit_servo_lib SHARED
 )
 set_target_properties(moveit_servo_lib PROPERTIES VERSION "${moveit_servo_VERSION}")
 ament_target_dependencies(moveit_servo_lib ${THIS_PACKAGE_INCLUDE_DEPENDS})
-target_link_libraries(moveit_servo_lib moveit_servo_lib_parameters)
+target_link_libraries(moveit_servo_lib moveit_servo_lib_parameters yaml-cpp)
 
 add_library(pose_tracking SHARED src/pose_tracking.cpp)
 ament_target_dependencies(pose_tracking ${THIS_PACKAGE_INCLUDE_DEPENDS})

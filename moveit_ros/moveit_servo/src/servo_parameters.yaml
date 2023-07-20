@@ -433,3 +433,9 @@ servo:
       bounds<>: [0.0, 1.0],
     }
   }
+
+  movement_limits_file: {
+    type: string,
+    default_value: "",
+    description: "Yaml file with end effector position/velocity limits and joint velocity limits"
+  }

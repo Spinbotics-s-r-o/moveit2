@@ -76,13 +76,24 @@ enum class ServoType
   JOINT_SPACE
 };
 
+struct JointMovementLimits {
+  double max_velocity = std::numeric_limits<double>::infinity();
+  double max_acceleration = std::numeric_limits<double>::infinity();
+};
+
+struct MovementLimits {
+  double max_ee_velocity = std::numeric_limits<double>::infinity();
+  Eigen::AlignedBox3d ee_pos_limits;
+  std::map<std::string, JointMovementLimits> joint_limits;
+};
+
 class ServoCalcs
 {
 public:
   ServoCalcs(const rclcpp::Node::SharedPtr& node,
              const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
              const std::shared_ptr<const servo::ParamListener>& servo_param_listener,
-             const CollisionCheck & collision_checker);
+             CollisionCheck & collision_checker);
 
   ~ServoCalcs();
 
@@ -227,6 +238,8 @@ protected:
     const Eigen::MatrixXd &jacobian_full, moveit::core::RobotState &robot_state, double lookahead_interval, const std::string &name,
     double *direction_error = nullptr);
 
+  void reloadMovementLimits();
+
   // Pointer to the ROS node
   std::shared_ptr<rclcpp::Node> node_;
 
@@ -284,7 +297,7 @@ protected:
   bool joint_command_is_stale_ = false;
   double collision_velocity_scale_ = 1.0;
 
-  const CollisionCheck& collision_checker_;
+  CollisionCheck& collision_checker_;
 
   // Use ArrayXd type to enable more coefficient-wise operations
   Eigen::ArrayXd delta_theta_;
@@ -316,6 +329,7 @@ protected:
   kinematics::KinematicsBaseConstPtr ik_solver_ = nullptr;
   Eigen::Isometry3d ik_base_to_tip_frame_;
   bool use_inv_jacobian_ = false;
+  MovementLimits movement_limits_;
 
   std::vector<double> debug_data_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr debug_pub_;

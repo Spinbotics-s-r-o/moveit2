@@ -69,6 +69,8 @@ public:
 
   double getCollisionVelocityScale(const Eigen::ArrayXd& delta_theta) const;
 
+  void setWorkspaceBounds(Eigen::AlignedBox3d workspace_bounds);
+
 private:
   /** \brief Get a read-only copy of the planning scene */
   planning_scene_monitor::LockedPlanningSceneRO getLockedPlanningSceneRO() const;
@@ -85,6 +87,7 @@ private:
 
   const double self_velocity_scale_coefficient_;
   const double scene_velocity_scale_coefficient_;
+  Eigen::AlignedBox3d workspace_bounds_;
 
   // collision request
   collision_detection::CollisionRequest collision_request_;

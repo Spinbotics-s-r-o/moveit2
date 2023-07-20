@@ -58,6 +58,12 @@ CollisionCheck::CollisionCheck(const rclcpp::Node::SharedPtr& node,
   , planning_scene_monitor_(planning_scene_monitor)
   , self_velocity_scale_coefficient_(-log(0.001) / servo_params_->self_collision_proximity_threshold)
   , scene_velocity_scale_coefficient_(-log(0.001) / servo_params_->scene_collision_proximity_threshold)
+  , workspace_bounds_(Eigen::Vector3d(-std::numeric_limits<double>::infinity(),
+                                      -std::numeric_limits<double>::infinity(),
+                                      -std::numeric_limits<double>::infinity()),
+                      Eigen::Vector3d(std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::infinity(),
+                                      std::numeric_limits<double>::infinity()))
 {
   // Init collision request
   collision_request_.group_name = servo_params_->move_group_name;
@@ -107,7 +113,15 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
                                                                      *current_state);
   double scene_collision_distance = collision_result.distance;
   collision_detected |= collision_result.collision;
-//  collision_result.print();
+  // collision_result.print();
+
+  auto group = current_state->getJointModelGroup(servo_params_->move_group_name);
+  Eigen::Isometry3d ee_trans = current_state->getGlobalLinkTransform(group->getLinkModelNames().back());
+  double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
+  Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
+  Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
+  double ws_bounds_distance = -workspace_bounds_.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
+  scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
 
   collision_result.clear();
   // Self-collisions and scene collisions are checked separately so different thresholds can be used
@@ -115,7 +129,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
       collision_request_, collision_result, *current_state, getLockedPlanningSceneRO()->getAllowedCollisionMatrix());
   double self_collision_distance = collision_result.distance;
   collision_detected |= collision_result.collision;
-//  collision_result.print();
+  // collision_result.print();
 
   double velocity_scale = 1;
   // If we're definitely in collision, stop immediately
@@ -160,7 +174,14 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
                                                                          *current_state);
       scene_collision_distance = collision_result.distance;
       collision_detected |= collision_result.collision;
-//      collision_result.print();
+      // collision_result.print();
+      auto group = current_state->getJointModelGroup(servo_params_->move_group_name);
+      Eigen::Isometry3d ee_trans = current_state->getGlobalLinkTransform(group->getLinkModelNames().back());
+      double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
+      Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
+      Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
+      double ws_bounds_distance = -workspace_bounds_.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
+      scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
 
       collision_result.clear();
       // Self-collisions and scene collisions are checked separately so different thresholds can be used
@@ -168,7 +189,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
           collision_request_, collision_result, *current_state, getLockedPlanningSceneRO()->getAllowedCollisionMatrix());
       self_collision_distance = collision_result.distance;
       collision_detected |= collision_result.collision;
-//      collision_result.print();
+      // collision_result.print();
 
       double future_velocity_scale = 1;
       // If we're definitely in collision, stop immediately
@@ -208,6 +229,11 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
     collision_velocity_scale_pub_->publish(std::move(msg));
   }
   return velocity_scale;
+}
+
+void CollisionCheck::setWorkspaceBounds(Eigen::AlignedBox3d workspace_bounds)
+{
+  workspace_bounds_ = workspace_bounds;
 }
 
 }  // namespace moveit_servo

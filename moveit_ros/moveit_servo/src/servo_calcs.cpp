@@ -49,6 +49,7 @@
 #include <moveit_servo/servo_calcs.h>
 #include <moveit_servo/utilities.h>
 #include "ik_common/dynamically_adjustable_ik.hpp"
+#include <yaml-cpp/yaml.h>
 
 // Disable -Wold-style-cast because all _THROTTLE macros trigger this
 // It would be too noisy to disable on a per-callsite basis
@@ -74,7 +75,7 @@ int const THREAD_PRIORITY = 40;
 ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
                        const planning_scene_monitor::PlanningSceneMonitorPtr& planning_scene_monitor,
                        const std::shared_ptr<const servo::ParamListener>& servo_param_listener,
-                       const CollisionCheck & collision_checker)
+                       CollisionCheck & collision_checker)
   : node_(node)
   , servo_param_listener_(servo_param_listener)
   , servo_params_(servo_param_listener_->get_params())
@@ -223,6 +224,7 @@ void ServoCalcs::start()
     // Send all zeros, for now.
     point.accelerations.resize(num_joints_);
   }
+  reloadMovementLimits();
   initial_joint_trajectory->points.push_back(point);
   last_sent_command_ = std::move(initial_joint_trajectory);
 
@@ -320,6 +322,70 @@ void ServoCalcs::updateParams()
       }
     }
     servo_params_ = params;
+
+    if (params.movement_limits_file != servo_params_.movement_limits_file) {
+      reloadMovementLimits();
+    }
+  }
+}
+
+void ServoCalcs::reloadMovementLimits()
+{
+  static const double inf = std::numeric_limits<double>::infinity();
+  auto clear_limits = [this]() {
+    movement_limits_.joint_limits.clear();
+    movement_limits_.ee_pos_limits = Eigen::AlignedBox3d(Eigen::Vector3d(-inf, -inf, -inf), Eigen::Vector3d(inf, inf, inf));
+    movement_limits_.max_ee_velocity = inf;
+  };
+  if (servo_params_.movement_limits_file.empty()) {
+    clear_limits();
+    return;
+  }
+  RCLCPP_INFO(LOGGER, "Loading movement_limits_file %s", servo_params_.movement_limits_file.c_str());
+  try {
+    YAML::Node limits_yaml = YAML::LoadFile(servo_params_.movement_limits_file);
+    if (!limits_yaml) {
+      RCLCPP_ERROR(LOGGER, "movement_limits_file invalid");
+      clear_limits();
+      return;
+    }
+
+    for (auto joint: limits_yaml) {
+      if (joint.first.as<std::string>() == "tcp") {
+        auto tcp_yaml = joint.second;
+        if (auto limit = tcp_yaml["max_velocity"])
+          movement_limits_.max_ee_velocity = limit.as<double>();
+        Eigen::Vector3d min_pos(-inf, -inf, -inf);
+        Eigen::Vector3d max_pos(-inf, -inf, -inf);
+        if (auto limit = tcp_yaml["min_x"])
+          min_pos[0] = limit.as<double>();
+        if (auto limit = tcp_yaml["min_y"])
+          min_pos[1] = limit.as<double>();
+        if (auto limit = tcp_yaml["min_z"])
+          min_pos[2] = limit.as<double>();
+        if (auto limit = tcp_yaml["max_x"])
+          max_pos[0] = limit.as<double>();
+        if (auto limit = tcp_yaml["max_y"])
+          max_pos[1] = limit.as<double>();
+        if (auto limit = tcp_yaml["max_z"])
+          max_pos[2] = limit.as<double>();
+        movement_limits_.ee_pos_limits = Eigen::AlignedBox3d(min_pos, max_pos);
+      }
+      else {
+        auto joint_yaml = joint.second;
+        JointMovementLimits joint_limits;
+        if (auto limit = joint_yaml["max_velocity"])
+          joint_limits.max_velocity = limit.as<double>();
+        if (auto limit = joint_yaml["max_acceleration"])
+          joint_limits.max_acceleration = limit.as<double>();
+        movement_limits_.joint_limits[joint.first.as<std::string>()] = joint_limits;
+        RCLCPP_INFO(LOGGER, "Adding joint limit %s vel %lf acc %lf", joint.first.as<std::string>().c_str(), joint_limits.max_velocity, joint_limits.max_acceleration);
+      }
+    }
+  }
+  catch (const YAML::Exception &e) {
+    RCLCPP_ERROR(LOGGER, "YAML error when loading movement limits: %s", e.what());
+    clear_limits();
   }
 }
 
@@ -743,7 +809,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
     // in case of active drift_dimensions we will compare quality of the IK solution against the pseudo_inverse approach and pick the better solution
     // Jacobi
     Eigen::VectorXd delta_theta_jacobi = pseudo_inverse * delta_x;
-    const StatusCode last_status = status_;
+    // const StatusCode last_status = status_;
     double singularity_scale_jacobi = velocityScalingFactorForSingularity(joint_model_group_, delta_x, svd, pseudo_inverse,
                                                     servo_params_.hard_stop_singularity_threshold,
                                                     servo_params_.lower_singularity_threshold,
@@ -935,6 +1001,7 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   // 5. apply position limits. This is a higher priority than velocity limits, so check it last.
 
   // Apply collision scaling
+  collision_checker_.setWorkspaceBounds(movement_limits_.ee_pos_limits);  // apply tcp position limit
   double collision_scale = collision_checker_.getCollisionVelocityScale(delta_theta);
   if (collision_scale > 0 && collision_scale < 1)
   {
@@ -949,6 +1016,45 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
     RCLCPP_ERROR_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "Halting for collision!");
   }
   delta_theta *= collision_scale;
+
+  // apply tcp velocity limit
+  Eigen::MatrixXd jacobian = current_state_->getJacobian(joint_model_group_);
+  double tcp_vel = (jacobian.block(0, 0, jacobian.rows(), 3)*delta_theta.block<3, 1>(0, 0).matrix()).norm()/servo_params_.publish_period;
+  if (tcp_vel > movement_limits_.max_ee_velocity) {
+    RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting tcp vel (%lf > %lf)", tcp_vel, movement_limits_.max_ee_velocity);
+    delta_theta *= movement_limits_.max_ee_velocity/tcp_vel;
+  }
+
+  // apply joint velocity limit
+  const auto &joint_model_names = joint_model_group_->getActiveJointModelNames();
+  for (int i = 0; i < delta_theta.rows(); i++) {
+    const auto &limit_it = movement_limits_.joint_limits.find(joint_model_names[i]);
+    if (limit_it != movement_limits_.joint_limits.end()) {
+      double v = std::abs(delta_theta[i]/servo_params_.publish_period);
+      const auto &limit = limit_it->second.max_velocity;
+      if (v > limit) {
+        RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting joint %d %s vel (%lf > %lf)", i, joint_model_names[i].c_str(), v, limit);
+        delta_theta *= limit/v;
+      }
+    }
+  }
+
+  // apply joint acceleration limit
+  for (int i = 0; i < delta_theta.rows(); i++) {
+    const auto &limit_it = movement_limits_.joint_limits.find(joint_model_names[i]);
+    if (limit_it != movement_limits_.joint_limits.end()) {
+      double v = delta_theta[i]/servo_params_.publish_period;
+      const auto &limit = limit_it->second.max_acceleration;
+      double current_vel = current_joint_state_.velocity[i];
+      double acc = std::abs(v - current_vel)/servo_params_.publish_period;
+      if (acc > limit) {
+        RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting joint %d acc (%lf %lf -> %lf > %lf) -> %lf", i, v, current_vel, acc, limit,
+                    current_vel + limit*servo_params_.publish_period*(v < current_vel ? -1.0 : 1.0));
+        v = current_vel + limit*servo_params_.publish_period*(v < current_vel ? -1.0 : 1.0);
+        delta_theta[i] = v*servo_params_.publish_period;
+      }
+    }
+  }
 
   // Loop through joints and update them, calculate velocities, and filter
   if (!applyJointUpdate(servo_params_.publish_period, delta_theta, current_joint_state_, next_joint_state_, smoother_))
@@ -1201,7 +1307,7 @@ Eigen::VectorXd ServoCalcs::scaleJointCommand(const control_msgs::msg::JointJog&
     catch (const std::out_of_range& e)
     {
       rclcpp::Clock& clock = *node_->get_clock();
-      RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "Ignoring joint " << command.joint_names[m]);
+      RCLCPP_DEBUG_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "Ignoring joint " << command.joint_names[m]);
       continue;
     }
     // Apply user-defined scaling if inputs are unitless [-1:1]
