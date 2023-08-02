@@ -1019,7 +1019,7 @@ int32_t ompl_interface::ModelBasedPlanningContext::logPlannerStatus(const og::Si
       break;
     case ompl::base::PlannerStatus::APPROXIMATE_SOLUTION:
       RCLCPP_WARN(LOGGER, "Solution is approximate");
-      result = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
+      result = moveit_msgs::msg::MoveItErrorCodes::PLANNING_FAILED;
       break;
     case ompl::base::PlannerStatus::EXACT_SOLUTION:
       result = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
