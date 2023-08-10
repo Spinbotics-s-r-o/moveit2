@@ -217,6 +217,9 @@ protected:
    */
   void removeDriftDimensions(Eigen::MatrixXd& matrix, Eigen::VectorXd& delta_x);
 
+  /* \brief Settings callbacks */
+  void eeFrameIdCB(const std_msgs::msg::String::ConstSharedPtr& msg);
+
   /* \brief Command callbacks */
   void twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg);
   void jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& msg);
@@ -282,6 +285,7 @@ protected:
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr twist_stamped_sub_;
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr collision_velocity_scale_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ee_frame_id_sub_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr status_pub_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_outgoing_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr multiarray_outgoing_cmd_pub_;
@@ -318,6 +322,8 @@ protected:
   control_msgs::msg::JointJog::ConstSharedPtr latest_joint_cmd_;
   rclcpp::Time latest_twist_command_stamp_ = rclcpp::Time(0., RCL_ROS_TIME);
   rclcpp::Time latest_joint_command_stamp_ = rclcpp::Time(0., RCL_ROS_TIME);
+
+  std::string ee_frame_id_;
 
   // input condition variable used for low latency mode
   std::condition_variable input_cv_;

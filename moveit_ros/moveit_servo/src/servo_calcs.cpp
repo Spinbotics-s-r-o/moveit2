@@ -94,13 +94,18 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
     throw std::runtime_error("Invalid move group name");
   }
 
+  // Subscribe to settings
+  ee_frame_id_sub_ = node_->create_subscription<std_msgs::msg::String>(
+      "~/ee_frame_id", rclcpp::QoS(1),
+      [this](const std_msgs::msg::String::ConstSharedPtr& msg) { return eeFrameIdCB(msg); });
+
   // Subscribe to command topics
   twist_stamped_sub_ = node_->create_subscription<geometry_msgs::msg::TwistStamped>(
-      servo_params_.cartesian_command_in_topic, rclcpp::SystemDefaultsQoS(),
+      servo_params_.cartesian_command_in_topic, rclcpp::QoS(1).best_effort(),
       [this](const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg) { return twistStampedCB(msg); });
 
   joint_cmd_sub_ = node_->create_subscription<control_msgs::msg::JointJog>(
-      servo_params_.joint_command_in_topic, rclcpp::SystemDefaultsQoS(),
+      servo_params_.joint_command_in_topic, rclcpp::QoS(1).best_effort(),
       [this](const control_msgs::msg::JointJog::ConstSharedPtr& msg) { return jointCmdCB(msg); });
 
   // ROS Server for allowing drift in some dimensions
@@ -188,6 +193,11 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
                 "calculations instead.",
                 joint_model_group_->getName().c_str());
   }
+
+  if (ik_solver_)
+    ee_frame_id_ = ik_solver_->getTipFrames().front();
+  else
+    ee_frame_id_ = joint_model_group_->getLinkModelNames().back();
 }
 
 ServoCalcs::~ServoCalcs()
@@ -541,7 +551,7 @@ void ServoCalcs::calculateSingleIteration()
   if (twist_command_is_stale_ && joint_command_is_stale_)
   {
     rclcpp::Clock& clock = *node_->get_clock();
-    RCLCPP_DEBUG_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD,
+    RCLCPP_DEBUG_STREAM_THROTTLE(LOGGER, clock, 100,
                                  "Skipping publishing because incoming commands are stale.");
     filteredHalt(*joint_trajectory);
   }
@@ -683,7 +693,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
   const Eigen::Isometry3d base_to_tip_frame_transform =
       current_state_->getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-      current_state_->getGlobalLinkTransform(ik_solver_->getTipFrame());
+      current_state_->getGlobalLinkTransform(ee_frame_id_);
   ik_base_to_tip_frame_ = base_to_tip_frame_transform;
 
   if (!use_inv_jacobian)
@@ -692,18 +702,36 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
     geometry_msgs::msg::Pose next_pose = poseFromCartesianDelta(delta_x, base_to_tip_frame_transform, lookahead_interval);
 
+    // // for debug logging only //
+    // if (delta_x.any()) {
+    //   Eigen::Isometry3d next_pose_eigen;
+    //   tf2::fromMsg(next_pose, next_pose_eigen);
+    //   RCLCPP_INFO_STREAM(LOGGER, "\n\n\n\n\n\n\n\n\ndelta_x\n" << delta_x << "\nnext_pose\n" << next_pose_eigen.matrix());
+    // }
+    // ////////////////////////////
+
     removeDriftDimensions(jacobian, delta_x);
 
     // setup for IK call
-    std::vector<double> solution(num_joints_);
     moveit_msgs::msg::MoveItErrorCodes err;
     kinematics::KinematicsQueryOptions opts;
     opts.return_approximate_solution = true;
     const ik_common::DynamicallyAdjustableIK *daik = dynamic_cast<const ik_common::DynamicallyAdjustableIK *>(ik_solver_.get());
     if (daik)
       daik->setOrientationVsPositionWeight(servo_params_.ik_rotation_error_multiplier);
-    if (ik_solver_->searchPositionIK(next_pose, current_joint_state_.position, servo_params_.publish_period / 2.0,
-                                     solution, err, opts))
+    const auto &tip_frames = ik_solver_->getTipFrames();
+    std::vector<geometry_msgs::msg::Pose> tip_frame_target_poses;
+    std::vector<double> solution(num_joints_);
+    for (auto &f : tip_frames) {
+      if (f == ee_frame_id_)
+        tip_frame_target_poses.push_back(next_pose);
+      else {
+        tip_frame_target_poses.emplace_back();
+        tip_frame_target_poses.back().orientation.w = std::numeric_limits<double>::infinity();
+      }
+    }
+    if (ik_solver_->searchPositionIK(tip_frame_target_poses, current_joint_state_.position, servo_params_.publish_period / 2.0,
+                                     std::vector<double>(), solution, kinematics::KinematicsBase::IKCallbackFn(), err, opts))
     {
       // find the difference in joint positions that will get us to the desired pose
       for (size_t i = 0; i < num_joints_; ++i)
@@ -713,9 +741,10 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       
       // // for debug logging only //
       // if (delta_x.any()) {
-      //   robot_state.setJointGroupPositions(joint_model_group_, solution);
-      //   auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
-      //                         robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+      //   auto solution_state = robot_state;
+      //   solution_state.setJointGroupPositions(joint_model_group_, solution);
+      //   auto next_tip_frame = solution_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
+      //       solution_state.getGlobalLinkTransform(ee_frame_id_);
       //   RCLCPP_INFO_STREAM(LOGGER,
       //                      "orig_theta\n" << current_joint_state_.position << "\norig_x\n"
       //                                     << ik_base_to_tip_frame_.matrix() <<
@@ -746,8 +775,8 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
     if (daik && drift_dimensions_[3] && drift_dimensions_[4] && drift_dimensions_[5]) {
       daik->setOrientationVsPositionWeight(0);
-      if (ik_solver_->searchPositionIK(next_pose, current_joint_state_.position, servo_params_.publish_period / 2.0,
-                                     solution, err, opts))
+      if (ik_solver_->searchPositionIK(tip_frame_target_poses, current_joint_state_.position, servo_params_.publish_period / 2.0,
+                                     std::vector<double>(), solution, kinematics::KinematicsBase::IKCallbackFn(), err, opts))
       {
         Eigen::VectorXd delta_theta_pos(jacobian.cols());
         // find the difference in joint positions that will get us to the desired pose
@@ -756,18 +785,18 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
           delta_theta_pos.coeffRef(i) = (solution.at(i) - current_joint_state_.position.at(i))/lookahead_interval;
         }
 
-        // for debug logging only //
+        // // for debug logging only //
         // if (delta_x.any()) {
         //   robot_state.setJointGroupPositions(joint_model_group_, solution);
         //   auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
-        //                         robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+        //                         robot_state.getGlobalLinkTransform(ee_frame_id_);
         //   RCLCPP_INFO_STREAM(LOGGER,
         //                      "IKPOS orig_theta\n" << current_joint_state_.position << "\norig_x\n"
         //                                               << ik_base_to_tip_frame_.matrix() <<
         //                                               "\nsolution_theta\n" << solution << "\nsolution_x\n"
         //                                               << next_tip_frame.matrix());
         // }
-        ////////////////////////////
+        // ////////////////////////////
 
         // if (delta_theta_pos.norm() >= servo_params_.publish_period*0.05) {
         bool using_ikp = true;
@@ -886,7 +915,7 @@ double ServoCalcs::solutionScore(
   double limits_scale = velocityLimitsScalingFactor(joint_model_group_, delta_theta/servo_params_.publish_period);
   // if (desired_delta_x.any())
   //   RCLCPP_INFO_STREAM(LOGGER, "delta_theta_orig\n" << delta_theta <<
-  //     "\nlimits scale " << limits_scale);
+  //     "\nlimits scale " << limits_scale << "\nlookahead interval " << lookahead_interval);
 
   // Eigen::VectorXd delta_x = jacobian*limits_scale*Eigen::VectorXd(delta_theta);
   Eigen::VectorXd delta_x(6);
@@ -897,7 +926,7 @@ double ServoCalcs::solutionScore(
       next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
     robot_state.setJointGroupPositions(joint_model_group_, next_position);
     auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                          robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+                          robot_state.getGlobalLinkTransform(ee_frame_id_);
     auto xyz = next_tip_frame.translation() - ik_base_to_tip_frame_.translation();
     auto rodr = Eigen::AngleAxisd(ik_base_to_tip_frame_.rotation().inverse()*next_tip_frame.rotation());
     Eigen::Vector3d axis = ik_base_to_tip_frame_.rotation()*rodr.axis();
@@ -936,7 +965,7 @@ double ServoCalcs::solutionScore(
       next_position[i] += delta_theta[i]*limits_scale*direction_error_scale*lookahead_interval;
     robot_state.setJointGroupPositions(joint_model_group_, next_position);
     auto next_tip_frame = robot_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                          robot_state.getGlobalLinkTransform(ik_solver_->getTipFrame());
+                          robot_state.getGlobalLinkTransform(ee_frame_id_);
     auto xyz = next_tip_frame.translation() - ik_base_to_tip_frame_.translation();
     auto rodr = Eigen::AngleAxisd(ik_base_to_tip_frame_.rotation().inverse()*next_tip_frame.rotation());
     Eigen::Vector3d axis = ik_base_to_tip_frame_.rotation()*rodr.axis();
@@ -1408,6 +1437,26 @@ bool ServoCalcs::getEEFrameTransform(geometry_msgs::msg::TransformStamped& trans
   return true;
 }
 
+void ServoCalcs::eeFrameIdCB(const std_msgs::msg::String::ConstSharedPtr& msg)
+{
+  if (ik_solver_) {
+    const auto &tip_frames = ik_solver_->getTipFrames();
+    if (std::find(tip_frames.begin(), tip_frames.end(), msg->data) == tip_frames.end()) {
+      RCLCPP_ERROR_STREAM(LOGGER, "End effector frame " << msg->data << " not found among tip frames. Ignoring. Valid values are: " <<
+                                                        (Eigen::Map<const Eigen::Array<std::string, 1, Eigen::Dynamic>>(tip_frames.data(), tip_frames.size())));
+      return;
+    }
+  }
+  else if (!joint_model_group_->hasLinkModel(msg->data)) {
+    const auto &link_models = joint_model_group_->getLinkModelNames();
+    RCLCPP_ERROR_STREAM(LOGGER, "End effector frame " << msg->data << " not found among tip frames. Ignoring. Valid values are: " <<
+                                                      (Eigen::Map<const Eigen::Array<std::string, 1, Eigen::Dynamic>>(link_models.data(), link_models.size())));
+    return;
+  }
+  ee_frame_id_ = msg->data;
+  RCLCPP_INFO(LOGGER, "Set ee_frame_id to %s", ee_frame_id_.c_str());
+}
+
 void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg)
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
@@ -1415,6 +1464,7 @@ void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSha
 
   if (msg->header.stamp != rclcpp::Time(0.))
     latest_twist_command_stamp_ = msg->header.stamp;
+  // RCLCPP_INFO(LOGGER, "received twist %lf", rclcpp::Time(msg->header.stamp).seconds());
 
   // notify that we have a new input
   new_input_cmd_ = true;
