@@ -76,7 +76,7 @@ public:
   {
     // Following call to planner() calls the motion planner defined for the pipeline and stores the trajectory inside
     // the MotionPlanResponse res variable which is then passed to STOMP for optimization
-    if (!planner(ps, req, res))
+    if (!planner(ps, req, res) || res.trajectory->getWayPointCount() == 0)
     {
       return false;
     }
