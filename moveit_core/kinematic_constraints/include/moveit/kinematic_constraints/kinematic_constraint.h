@@ -396,6 +396,7 @@ public:
 
   void clear() override;
   ConstraintEvaluationResult decide(const moveit::core::RobotState& state, bool verbose = false) const override;
+  ConstraintEvaluationResult decide(const moveit::core::RobotState& state, const Eigen::Matrix3d orientation, bool verbose = false) const;
   bool enabled() const override;
   void print(std::ostream& out = std::cout) const override;
 
