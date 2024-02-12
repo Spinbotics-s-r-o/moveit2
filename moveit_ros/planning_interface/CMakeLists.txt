@@ -19,6 +19,7 @@ find_package(tf2_ros REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rclpy REQUIRED)
+find_package(spinbot_msgs REQUIRED)
 
 # find_package(PythonInterp REQUIRED)
 # find_package(PythonLibs "${PYTHON_VERSION_MAJOR}.${PYTHON_VERSION_MINOR}" REQUIRED)

@@ -52,7 +52,7 @@
 #include <moveit/robot_state/conversions.h>
 #include <moveit_msgs/action/execute_trajectory.hpp>
 #include <moveit_msgs/srv/query_planner_interfaces.hpp>
-#include <moveit_msgs/srv/get_cartesian_path.hpp>
+#include <spinbot_msgs/srv/get_cartesian_path.hpp>
 #include <moveit_msgs/srv/grasp_planning.hpp>
 #include <moveit_msgs/srv/get_planner_params.hpp>
 #include <moveit_msgs/srv/set_planner_params.hpp>
@@ -188,7 +188,7 @@ public:
     set_params_service_ = node_->create_client<moveit_msgs::srv::SetPlannerParams>(
         rclcpp::names::append(opt_.move_group_namespace, move_group::SET_PLANNER_PARAMS_SERVICE_NAME), qos_default(),
         callback_group_);
-    cartesian_path_service_ = node_->create_client<moveit_msgs::srv::GetCartesianPath>(
+    cartesian_path_service_ = node_->create_client<spinbot_msgs::srv::GetCartesianPath>(
         rclcpp::names::append(opt_.move_group_namespace, move_group::CARTESIAN_PATH_SERVICE_NAME), qos_default(),
         callback_group_);
 
@@ -489,6 +489,18 @@ public:
       return false;
   }
 
+  void setPlanningSceneDiff(const moveit_msgs::msg::PlanningScene& planning_scene_diff)
+  {
+    planning_scene_diff_ = planning_scene_diff;
+  }
+
+  void clearPlanningSceneDiff()
+  {
+    planning_scene_diff_ = moveit_msgs::msg::PlanningScene();
+    planning_scene_diff_.is_diff = true;
+    planning_scene_diff_.robot_state.is_diff = true;
+  }
+
   void setEndEffectorLink(const std::string& end_effector)
   {
     end_effector_link_ = end_effector;
@@ -784,8 +796,7 @@ public:
     goal.planning_options.plan_only = true;
     goal.planning_options.look_around = false;
     goal.planning_options.replan = false;
-    goal.planning_options.planning_scene_diff.is_diff = true;
-    goal.planning_options.planning_scene_diff.robot_state.is_diff = true;
+    goal.planning_options.planning_scene_diff = planning_scene_diff_;
 
     bool done = false;
     rclcpp_action::ResultCode code = rclcpp_action::ResultCode::UNKNOWN;
@@ -989,8 +1000,8 @@ public:
                               const moveit_msgs::msg::Constraints& path_constraints, bool avoid_collisions,
                               moveit_msgs::msg::MoveItErrorCodes& error_code, double velocity_scaling_factor, double acceleration_scaling_factor)
   {
-    auto req = std::make_shared<moveit_msgs::srv::GetCartesianPath::Request>();
-    moveit_msgs::srv::GetCartesianPath::Response::SharedPtr response;
+    auto req = std::make_shared<spinbot_msgs::srv::GetCartesianPath::Request>();
+    spinbot_msgs::srv::GetCartesianPath::Response::SharedPtr response;
 
     if (considered_start_state_)
     {
@@ -1014,6 +1025,7 @@ public:
     req->max_acceleration_scaling_factor = max_acceleration_scaling_factor_;
     req->cartesian_speed_limited_link = cartesian_speed_limited_link_;
     req->max_cartesian_speed = max_cartesian_speed_;
+    req->planning_scene_diff = planning_scene_diff_;
 
     auto future_response = cartesian_path_service_->async_send_request(req);
     if (future_response.valid())
@@ -1442,6 +1454,7 @@ private:
   std::string end_effector_link_;
   std::string pose_reference_frame_;
   std::string support_surface_;
+  moveit_msgs::msg::PlanningScene planning_scene_diff_;
 
   // ROS communication
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr trajectory_event_publisher_;
@@ -1449,7 +1462,7 @@ private:
   rclcpp::Client<moveit_msgs::srv::QueryPlannerInterfaces>::SharedPtr query_service_;
   rclcpp::Client<moveit_msgs::srv::GetPlannerParams>::SharedPtr get_params_service_;
   rclcpp::Client<moveit_msgs::srv::SetPlannerParams>::SharedPtr set_params_service_;
-  rclcpp::Client<moveit_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
+  rclcpp::Client<spinbot_msgs::srv::GetCartesianPath>::SharedPtr cartesian_path_service_;
   // rclcpp::Client<moveit_msgs::srv::GraspPlanning>::SharedPtr plan_grasps_service_;
   std::unique_ptr<moveit_warehouse::ConstraintsStorage> constraints_storage_;
   std::unique_ptr<std::thread> constraints_init_thread_;
@@ -1629,6 +1642,16 @@ moveit::core::MoveItErrorCode MoveGroupInterface::execute(const moveit_msgs::msg
 moveit::core::MoveItErrorCode MoveGroupInterface::plan(Plan& plan)
 {
   return impl_->plan(plan);
+}
+
+void MoveGroupInterface::setPlanningSceneDiff(const moveit_msgs::msg::PlanningScene& planning_scene_diff)
+{
+  impl_->setPlanningSceneDiff(planning_scene_diff);
+}
+
+void MoveGroupInterface::clearPlanningSceneDiff()
+{
+  impl_->clearPlanningSceneDiff();
 }
 
 // moveit_msgs::action::Pickup::Goal MoveGroupInterface::constructPickupGoal(const std::string& object,

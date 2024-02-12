@@ -31,6 +31,7 @@
   <depend>tf2_ros</depend>
   <depend version_gte="1.11.2">pluginlib</depend>
   <depend>std_srvs</depend>
+  <depend>spinbot_msgs</depend>
 
   <exec_depend>moveit_kinematics</exec_depend>
 

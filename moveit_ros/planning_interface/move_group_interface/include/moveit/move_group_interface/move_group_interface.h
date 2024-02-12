@@ -660,6 +660,10 @@ public:
       This is equivalent to setting the EndEffectorLink to the parent link of this end effector. */
   bool setEndEffector(const std::string& eef_name);
 
+  void setPlanningSceneDiff(const moveit_msgs::msg::PlanningScene& planning_scene_diff);
+
+  void clearPlanningSceneDiff();
+
   /// Forget pose(s) specified for \e end_effector_link
   void clearPoseTarget(const std::string& end_effector_link = "");
 

@@ -76,20 +76,20 @@ void MoveGroupCartesianPathService::initialize()
   display_path_ = context_->moveit_cpp_->getNode()->create_publisher<moveit_msgs::msg::DisplayTrajectory>(
       planning_pipeline::PlanningPipeline::DISPLAY_PATH_TOPIC, 10);
 
-  cartesian_path_service_ = context_->moveit_cpp_->getNode()->create_service<moveit_msgs::srv::GetCartesianPath>(
+  cartesian_path_service_ = context_->moveit_cpp_->getNode()->create_service<spinbot_msgs::srv::GetCartesianPath>(
 
       CARTESIAN_PATH_SERVICE_NAME,
       [this](const std::shared_ptr<rmw_request_id_t>& req_id,
-             const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Request>& req,
-             const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Response>& res) -> bool {
+             const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Request>& req,
+             const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Response>& res) -> bool {
         return computeService(req_id, req, res);
       });
 }
 
 bool MoveGroupCartesianPathService::computeService(
     const std::shared_ptr<rmw_request_id_t>& /* unused */,
-    const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Request>& req,
-    const std::shared_ptr<moveit_msgs::srv::GetCartesianPath::Response>& res)
+    const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Request>& req,
+    const std::shared_ptr<spinbot_msgs::srv::GetCartesianPath::Response>& res)
 {
   RCLCPP_INFO(LOGGER, "Received request to compute Cartesian path");
   context_->planning_scene_monitor_->updateFrameTransforms();
@@ -148,14 +148,18 @@ bool MoveGroupCartesianPathService::computeService(
         {
           moveit::core::GroupStateValidityCallbackFn constraint_fn;
           std::unique_ptr<planning_scene_monitor::LockedPlanningSceneRO> ls;
+          planning_scene::PlanningSceneConstPtr ls_scene;
           std::unique_ptr<kinematic_constraints::KinematicConstraintSet> kset;
           if (req->avoid_collisions || !moveit::core::isEmpty(req->path_constraints))
           {
             ls = std::make_unique<planning_scene_monitor::LockedPlanningSceneRO>(context_->planning_scene_monitor_);
+            auto lss = (*ls)->diff();
+            lss->usePlanningSceneMsg(req->planning_scene_diff);
+            ls_scene = lss;
             kset = std::make_unique<kinematic_constraints::KinematicConstraintSet>((*ls)->getRobotModel());
             kset->add(req->path_constraints, (*ls)->getTransforms());
             constraint_fn =
-                [scene = req->avoid_collisions ? static_cast<const planning_scene::PlanningSceneConstPtr&>(*ls).get() :
+                [scene = req->avoid_collisions ? ls_scene.get() :
                                                  nullptr,
                  kset = kset->empty() ? nullptr : kset.get()](moveit::core::RobotState* robot_state,
                                                               const moveit::core::JointModelGroup* joint_group,
