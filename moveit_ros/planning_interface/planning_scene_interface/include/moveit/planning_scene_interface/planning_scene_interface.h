@@ -125,7 +125,7 @@ public:
 
   /** \brief Update the planning_scene of the move_group node with the given ps synchronously.
       Other PlanningSceneMonitors will NOT receive the update unless they subscribe to move_group's monitored scene */
-  bool applyPlanningScene(const moveit_msgs::msg::PlanningScene& ps);
+  bool applyPlanningScene(const moveit_msgs::msg::PlanningScene& ps, bool sync = true);
 
   /** \brief Add collision objects to the world via /planning_scene.
       Make sure object.operation is set to object.ADD.

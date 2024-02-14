@@ -228,19 +228,25 @@ public:
     return result;
   }
 
-  bool applyPlanningScene(const moveit_msgs::msg::PlanningScene& planning_scene)
+  bool applyPlanningScene(const moveit_msgs::msg::PlanningScene& planning_scene, bool sync)
   {
-    auto request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();
-    moveit_msgs::srv::ApplyPlanningScene::Response::SharedPtr response;
-    request->scene = planning_scene;
+    if (sync) {
+      auto request = std::make_shared<moveit_msgs::srv::ApplyPlanningScene::Request>();
+      moveit_msgs::srv::ApplyPlanningScene::Response::SharedPtr response;
+      request->scene = planning_scene;
 
-    auto res = apply_planning_scene_service_->async_send_request(request);
-    if (rclcpp::spin_until_future_complete(node_, res) != rclcpp::FutureReturnCode::SUCCESS)
-    {
-      RCLCPP_WARN(LOGGER, "Failed to call ApplyPlanningScene service");
+      auto res = apply_planning_scene_service_->async_send_request(request);
+      if (rclcpp::spin_until_future_complete(node_, res) != rclcpp::FutureReturnCode::SUCCESS)
+      {
+        RCLCPP_WARN(LOGGER, "Failed to call ApplyPlanningScene service");
+      }
+      response = res.get();
+      return response->success;
     }
-    response = res.get();
-    return response->success;
+    else {
+      planning_scene_diff_publisher_->publish(planning_scene);
+      return true;
+    }
   }
 
   void addCollisionObjects(const std::vector<moveit_msgs::msg::CollisionObject>& collision_objects,
@@ -413,9 +419,9 @@ bool PlanningSceneInterface::applyAttachedCollisionObjects(
   return applyPlanningScene(ps);
 }
 
-bool PlanningSceneInterface::applyPlanningScene(const moveit_msgs::msg::PlanningScene& ps)
+bool PlanningSceneInterface::applyPlanningScene(const moveit_msgs::msg::PlanningScene& ps, bool sync)
 {
-  return impl_->applyPlanningScene(ps);
+  return impl_->applyPlanningScene(ps, sync);
 }
 
 void PlanningSceneInterface::addCollisionObjects(const std::vector<moveit_msgs::msg::CollisionObject>& collision_objects,
