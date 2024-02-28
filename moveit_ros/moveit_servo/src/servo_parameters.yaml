@@ -416,6 +416,12 @@ servo:
     description: "How much an inaccurate ik solution should be slowed down due to its direction error"
   }
 
+  collision_velocity_penalty_coefficient: {
+    type: double,
+    default_value: 1.0,
+    description: "How much should the velocity be reduced when a collision is detected nearby"
+  }
+
   leaving_collision_velocity_boost: {
     type: double,
     default_value: 0.3,

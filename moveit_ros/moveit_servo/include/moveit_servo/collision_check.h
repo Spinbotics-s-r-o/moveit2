@@ -90,7 +90,7 @@ private:
   Eigen::AlignedBox3d workspace_bounds_;
 
   // collision request
-  collision_detection::CollisionRequest collision_request_;
+  collision_detection::DistanceRequest distance_request_;
 
   // ROS
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr collision_velocity_scale_pub_;

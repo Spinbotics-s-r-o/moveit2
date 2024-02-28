@@ -56,8 +56,8 @@ CollisionCheck::CollisionCheck(const rclcpp::Node::SharedPtr& node,
   , servo_param_listener_(servo_param_listener)
   , servo_params_(std::make_shared<servo::Params>(servo_param_listener_->get_params()))
   , planning_scene_monitor_(planning_scene_monitor)
-  , self_velocity_scale_coefficient_(-log(0.001) / servo_params_->self_collision_proximity_threshold)
-  , scene_velocity_scale_coefficient_(-log(0.001) / servo_params_->scene_collision_proximity_threshold)
+  , self_velocity_scale_coefficient_(servo_params_->collision_velocity_penalty_coefficient)  //-log(0.001) / servo_params_->self_collision_proximity_threshold)
+  , scene_velocity_scale_coefficient_(servo_params_->collision_velocity_penalty_coefficient)  //-log(0.001) / servo_params_->scene_collision_proximity_threshold)
   , workspace_bounds_(Eigen::Vector3d(-std::numeric_limits<double>::infinity(),
                                       -std::numeric_limits<double>::infinity(),
                                       -std::numeric_limits<double>::infinity()),
@@ -66,9 +66,12 @@ CollisionCheck::CollisionCheck(const rclcpp::Node::SharedPtr& node,
                                       std::numeric_limits<double>::infinity()))
 {
   // Init collision request
-  collision_request_.group_name = servo_params_->move_group_name;
-  collision_request_.distance = true;  // enable distance-based collision checking
-  collision_request_.contacts = false;  // Record the names of collision pairs
+  distance_request_.type = collision_detection::DistanceRequestType::SINGLE;
+  distance_request_.group_name = servo_params_->move_group_name;
+  distance_request_.enable_nearest_points = true;
+  distance_request_.enable_signed_distance = true;
+  distance_request_.compute_gradient = true;
+  distance_request_.max_contacts_per_body = 100;
 
   if (servo_params_->collision_check_rate < MIN_RECOMMENDED_COLLISION_RATE)
   {
@@ -101,125 +104,132 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
 
   if (!servo_params.check_collisions)
     return 1.0;
-  // Update to the latest current state
-  auto current_state = planning_scene_monitor_->getStateMonitor()->getCurrentState();
-  current_state->updateCollisionBodyTransforms();
-  bool collision_detected = false;
 
   // Do a timer-safe distance-based collision detection
   collision_detection::CollisionResult collision_result;
   collision_result.clear();
-  getLockedPlanningSceneRO()->getCollisionEnv()->checkRobotCollision(collision_request_, collision_result,
-                                                                     *current_state);
-  double scene_collision_distance = collision_result.distance;
-  collision_detected |= collision_result.collision;
-  // collision_result.print();
+  auto scene = getLockedPlanningSceneRO();
+  auto current_state = scene->getCurrentState();
+  current_state.updateCollisionBodyTransforms();
+  auto distance_request = distance_request_;
+  distance_request.acm = &scene->getAllowedCollisionMatrix();
+  distance_request.enableGroup(scene->getRobotModel());
+  collision_detection::DistanceResult distance_result;
+  distance_result.clear();
 
-  auto group = current_state->getJointModelGroup(servo_params_->move_group_name);
-  Eigen::Isometry3d ee_trans = current_state->getGlobalLinkTransform(group->getLinkModelNames().back());
+  scene->getCollisionEnv()->distanceRobot(distance_request, distance_result, current_state);
+  double scene_collision_distance = distance_result.minimum_distance.distance;
+  auto distances = distance_result.distances;
+
+  auto group = current_state.getJointModelGroup(servo_params_->move_group_name);
+  Eigen::Isometry3d ee_trans = current_state.getGlobalLinkTransform(group->getLinkModelNames().back());
   double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
   Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
   Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
   double ws_bounds_distance = -workspace_bounds_.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
   scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
 
-  collision_result.clear();
+  distance_result.clear();
   // Self-collisions and scene collisions are checked separately so different thresholds can be used
-  getLockedPlanningSceneRO()->getCollisionEnvUnpadded()->checkSelfCollision(
-      collision_request_, collision_result, *current_state, getLockedPlanningSceneRO()->getAllowedCollisionMatrix());
-  double self_collision_distance = collision_result.distance;
-  collision_detected |= collision_result.collision;
-  // collision_result.print();
+  scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, current_state);
+  double self_collision_distance = distance_result.minimum_distance.distance;
+  for (auto &dist : distance_result.distances)
+    distances[dist.first].insert(distances[dist.first].end(), dist.second.begin(), dist.second.end());
 
   double velocity_scale = 1;
-  // If we're definitely in collision, stop immediately
-  if (collision_detected)
-  {
-    velocity_scale = 0;
-  }
-  else
-  {
-    // If we are far from a collision, velocity_scale should be 1.
-    // If we are very close to a collision, velocity_scale should be ~zero.
-    // When scene_collision_proximity_threshold is breached, start decelerating exponentially.
-    if (scene_collision_distance < servo_params.scene_collision_proximity_threshold)
-    {
-      // velocity_scale = e ^ k * (collision_distance - threshold)
-      // k = - ln(0.001) / collision_proximity_threshold
-      // velocity_scale should equal one when collision_distance is at collision_proximity_threshold.
-      // velocity_scale should equal 0.001 when collision_distance is at zero.
-      velocity_scale = std::min(velocity_scale,
-                                exp(scene_velocity_scale_coefficient_ *
-                                     (scene_collision_distance - servo_params.scene_collision_proximity_threshold)));
-    }
 
-    if (self_collision_distance < servo_params.self_collision_proximity_threshold)
-    {
-      velocity_scale =
-          std::min(velocity_scale, exp(self_velocity_scale_coefficient_ *
-                                       (self_collision_distance - servo_params.self_collision_proximity_threshold)));
-    }
+  if (scene_collision_distance < servo_params.scene_collision_proximity_threshold || self_collision_distance < servo_params.self_collision_proximity_threshold) {
+    const moveit::core::JointModel* root_joint_model = group->getJointModels()[0];  // group->getJointRoots()[0];
+    const moveit::core::LinkModel* root_link_model = root_joint_model->getParentLinkModel();
+    Eigen::MatrixXd jacobian;
+    // getGlobalLinkTransform() returns a valid isometry by contract
+    Eigen::Isometry3d reference_transform =
+        root_link_model ? current_state.getGlobalLinkTransform(root_link_model).inverse() : Eigen::Isometry3d::Identity();
+    // std::ostringstream ss;  // for debug logging
 
-    if (velocity_scale != 1) {
-      // Update to the latest current state
-      Eigen::VectorXd positions;
-      current_state->copyJointGroupPositions(servo_params.move_group_name, positions);
-      current_state->setJointGroupPositions(servo_params.move_group_name, positions + delta_theta.matrix());
-      current_state->updateCollisionBodyTransforms();
-      collision_detected = false;
+    auto next_scene = scene->diff();
+    auto &next_state = next_scene->getCurrentStateNonConst();
+    Eigen::VectorXd positions;
+    next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+    next_state.setJointGroupPositions(servo_params.move_group_name, positions + delta_theta.matrix());
+    next_state.updateCollisionBodyTransforms();
+    distance_result.clear();
+    next_scene->getCollisionEnv()->distanceRobot(distance_request, distance_result, next_state);
+    auto next_distances = distance_result.distances;
+    distance_result.clear();
+    next_scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, next_state);
+    for (auto &dist : distance_result.distances)
+      next_distances[dist.first].insert(next_distances[dist.first].end(), dist.second.begin(), dist.second.end());
 
-      // Do a timer-safe distance-based collision detection
-      collision_result.clear();
-      getLockedPlanningSceneRO()->getCollisionEnv()->checkRobotCollision(collision_request_, collision_result,
-                                                                         *current_state);
-      scene_collision_distance = collision_result.distance;
-      collision_detected |= collision_result.collision;
-      // collision_result.print();
-      auto group = current_state->getJointModelGroup(servo_params_->move_group_name);
-      Eigen::Isometry3d ee_trans = current_state->getGlobalLinkTransform(group->getLinkModelNames().back());
-      double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
-      Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
-      Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
-      double ws_bounds_distance = -workspace_bounds_.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
-      scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
+    for (auto &dist : distances) {
+      for (auto &d : dist.second) {
+        // getLinkModel produces warning if not checked using hasLinkModel
+        auto first_link = group->hasLinkModel(d.link_names[0]) ? group->getLinkModel(d.link_names[0]) : nullptr;
+        auto second_link = group->hasLinkModel(d.link_names[1]) ? group->getLinkModel(d.link_names[1]) : nullptr;
 
-      collision_result.clear();
-      // Self-collisions and scene collisions are checked separately so different thresholds can be used
-      getLockedPlanningSceneRO()->getCollisionEnvUnpadded()->checkSelfCollision(
-          collision_request_, collision_result, *current_state, getLockedPlanningSceneRO()->getAllowedCollisionMatrix());
-      self_collision_distance = collision_result.distance;
-      collision_detected |= collision_result.collision;
-      // collision_result.print();
+        bool is_self_collision = first_link && second_link;
+        double proximity_threshold = is_self_collision ? servo_params.self_collision_proximity_threshold : servo_params.scene_collision_proximity_threshold;
 
-      double future_velocity_scale = 1;
-      // If we're definitely in collision, stop immediately
-      if (collision_detected)
-        future_velocity_scale = 0;
-      else {
-        // If we are far from a collision, future_velocity_scale should be 1.
-        // If we are very close to a collision, future_velocity_scale should be ~zero.
-        // When scene_collision_proximity_threshold is breached, start decelerating exponentially.
-        if (scene_collision_distance < servo_params.scene_collision_proximity_threshold) {
-          // future_velocity_scale = e ^ k * (collision_distance - threshold)
-          // k = - ln(0.001) / collision_proximity_threshold
-          // future_velocity_scale should equal one when collision_distance is at collision_proximity_threshold.
-          // future_velocity_scale should equal 0.001 when collision_distance is at zero.
-          future_velocity_scale = std::min(future_velocity_scale,
-                                           exp(scene_velocity_scale_coefficient_ *
-                                         (scene_collision_distance -
-                                          servo_params.scene_collision_proximity_threshold)));
+        if (d.distance >= proximity_threshold)
+          continue;
+        // RCLCPP_INFO(LOGGER, "Proximity detected between %s and %s at distance %f (%s %lx %s %lx)", d.link_names[0].c_str(), d.link_names[1].c_str(), d.distance,
+        //             d.link_names[0].c_str(), (long)first_link, d.link_names[1].c_str(), (long)second_link);
+        double velocity_scale_coefficient = is_self_collision ? self_velocity_scale_coefficient_ : scene_velocity_scale_coefficient_;
+
+        Eigen::Vector3d first_dir = Eigen::Vector3d::Zero();
+        if (first_link) {
+          Eigen::Isometry3d link_transform = reference_transform * current_state.getGlobalLinkTransform(first_link);
+          // RCLCPP_INFO_STREAM(LOGGER, "First col point: " << (link_transform.inverse()*d.nearest_points[0]).transpose());
+          current_state.getJacobian(group, first_link, link_transform.inverse()*d.nearest_points[0], jacobian, false);
+          first_dir = jacobian*delta_theta.matrix();
+        }
+        Eigen::Vector3d second_dir = Eigen::Vector3d::Zero();
+        if (second_link) {
+          Eigen::Isometry3d link_transform = reference_transform * current_state.getGlobalLinkTransform(second_link);
+          // RCLCPP_INFO_STREAM(LOGGER, "Second col point: " << (link_transform.inverse()*d.nearest_points[1]).transpose());
+          current_state.getJacobian(group, second_link, link_transform.inverse()*d.nearest_points[1], jacobian, false);
+          second_dir = jacobian*delta_theta.matrix();
+        }
+        Eigen::Vector3d approach_dir = first_dir - second_dir;
+        double approach_ratio = 0.0;
+        const double epsilon = std::numeric_limits<double>::epsilon();
+        if (approach_dir.squaredNorm() > 0.0) {
+          if (d.normal.squaredNorm() <= epsilon) {
+            auto &ndist = next_distances[dist.first];
+            if (ndist.empty()) {
+              d.normal = -approach_dir.normalized();
+              d.distance = std::abs(d.distance);
+            }
+            else {
+              auto nd = std::min_element(ndist.begin(), ndist.end(),
+                                         [&d](const auto &a, const auto &b) {
+                return (a.nearest_points[0] - d.nearest_points[0]).squaredNorm() < (b.nearest_points[0] - d.nearest_points[0]).squaredNorm();
+              });
+              current_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+              // ss << "\nCurr positions: " << positions.transpose();
+              // next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+              // ss << "\nNext positions: " << positions.transpose();
+              // ss << "\nUsing next (previous d had normal " << d.normal.transpose() << ", dist " << d.distance << ")";
+              d.normal = nd->normal;
+              d.distance = nd->distance;
+            }
+          }
+          approach_ratio = d.normal.squaredNorm() > epsilon ? (d.normal*(d.distance >= 0.0 ? 1 : -1)).dot(approach_dir)/approach_dir.norm() : 1.0;
         }
 
-        if (self_collision_distance < servo_params.self_collision_proximity_threshold) {
-          future_velocity_scale =
-              std::min(future_velocity_scale, exp(self_velocity_scale_coefficient_ *
-                                                  (self_collision_distance -
-                                            servo_params.self_collision_proximity_threshold)));
-        }
+        double vel_scale = pow(std::max(0.0, d.distance)/proximity_threshold, velocity_scale_coefficient); // exp(velocity_scale_coefficient * (d.distance - proximity_threshold));
+        double leave_boost = servo_params.leaving_collision_velocity_boost + std::max(0.0, -approach_ratio)*(1.0 - servo_params.leaving_collision_velocity_boost);
+        vel_scale = std::min(vel_scale < leave_boost ? leave_boost : vel_scale,
+                             approach_ratio <= epsilon ? 1.0 : vel_scale/std::max(epsilon, approach_ratio));
+        // ss << "\nFirst " << d.link_names[0] << ": " << first_dir.transpose() <<
+        //       "\nSecond " << d.link_names[1] << ": " << second_dir.transpose() <<
+        //       "\nNormal " << d.normal.transpose() << "; dist " << d.distance <<
+        //       "\nApproach dir: " << approach_dir.transpose() << "\nApproach ratio: " << approach_ratio << "\nVelocity scale: " << vel_scale << "\n";
+        velocity_scale = std::min(velocity_scale, vel_scale);
       }
-      if (future_velocity_scale > velocity_scale)
-        velocity_scale = std::min(1.0, velocity_scale + servo_params.leaving_collision_velocity_boost);
     }
+    // if (velocity_scale >= 0.001 && delta_theta.matrix().norm() >= 0.001)
+    //   RCLCPP_INFO_STREAM(LOGGER, ss.str());
   }
 
   // Publish collision velocity scaling message.
