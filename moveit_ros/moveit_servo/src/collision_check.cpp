@@ -117,7 +117,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   collision_detection::DistanceResult distance_result;
   distance_result.clear();
 
-  scene->getCollisionEnv()->distanceRobot(distance_request, distance_result, current_state);
+  scene->getCollisionEnvUnpadded()->distanceRobot(distance_request, distance_result, current_state);
   double scene_collision_distance = distance_result.minimum_distance.distance;
   auto distances = distance_result.distances;
 
@@ -141,31 +141,22 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   if (scene_collision_distance < servo_params.scene_collision_proximity_threshold || self_collision_distance < servo_params.self_collision_proximity_threshold) {
     const moveit::core::JointModel* root_joint_model = group->getJointModels()[0];  // group->getJointRoots()[0];
     const moveit::core::LinkModel* root_link_model = root_joint_model->getParentLinkModel();
-    Eigen::MatrixXd jacobian;
     // getGlobalLinkTransform() returns a valid isometry by contract
     Eigen::Isometry3d reference_transform =
-        root_link_model ? current_state.getGlobalLinkTransform(root_link_model).inverse() : Eigen::Isometry3d::Identity();
+        root_link_model ? current_state.getGlobalLinkTransform(root_link_model) : Eigen::Isometry3d::Identity();
     // std::ostringstream ss;  // for debug logging
+    // ss << "\ndelta_theta: " << delta_theta.transpose();
 
-    auto next_scene = scene->diff();
-    auto &next_state = next_scene->getCurrentStateNonConst();
-    Eigen::VectorXd positions;
-    next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
-    next_state.setJointGroupPositions(servo_params.move_group_name, positions + delta_theta.matrix());
-    next_state.updateCollisionBodyTransforms();
-    distance_result.clear();
-    next_scene->getCollisionEnv()->distanceRobot(distance_request, distance_result, next_state);
-    auto next_distances = distance_result.distances;
-    distance_result.clear();
-    next_scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, next_state);
-    for (auto &dist : distance_result.distances)
-      next_distances[dist.first].insert(next_distances[dist.first].end(), dist.second.begin(), dist.second.end());
+    planning_scene::PlanningScenePtr next_scene;
+    collision_detection::DistanceMap next_distances;
+    auto robot_model = scene->getRobotModel();
+    Eigen::MatrixXd jacobian;
 
     for (auto &dist : distances) {
       for (auto &d : dist.second) {
         // getLinkModel produces warning if not checked using hasLinkModel
-        auto first_link = group->hasLinkModel(d.link_names[0]) ? group->getLinkModel(d.link_names[0]) : nullptr;
-        auto second_link = group->hasLinkModel(d.link_names[1]) ? group->getLinkModel(d.link_names[1]) : nullptr;
+        auto first_link = robot_model->hasLinkModel(d.link_names[0]) ? robot_model->getLinkModel(d.link_names[0]) : nullptr;
+        auto second_link = robot_model->hasLinkModel(d.link_names[1]) ? robot_model->getLinkModel(d.link_names[1]) : nullptr;
 
         bool is_self_collision = first_link && second_link;
         double proximity_threshold = is_self_collision ? servo_params.self_collision_proximity_threshold : servo_params.scene_collision_proximity_threshold;
@@ -178,23 +169,40 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
 
         Eigen::Vector3d first_dir = Eigen::Vector3d::Zero();
         if (first_link) {
-          Eigen::Isometry3d link_transform = reference_transform * current_state.getGlobalLinkTransform(first_link);
-          // RCLCPP_INFO_STREAM(LOGGER, "First col point: " << (link_transform.inverse()*d.nearest_points[0]).transpose());
+          Eigen::Isometry3d link_transform = current_state.getGlobalLinkTransform(first_link);
           current_state.getJacobian(group, first_link, link_transform.inverse()*d.nearest_points[0], jacobian, false);
-          first_dir = jacobian*delta_theta.matrix();
+          first_dir = reference_transform.linear()*(jacobian*delta_theta.matrix()).block<3, 1>(0, 0);
+          // ss << "\nfcp " << d.link_names[0] << ": " << (link_transform.inverse()*d.nearest_points[0]).transpose()
+          //    << "\nglobal:" << d.nearest_points[0].transpose() << "; dir: " << first_dir.transpose() << " (" << (jacobian*delta_theta.matrix()).block<3, 1>(0, 0).transpose() << ")";
         }
         Eigen::Vector3d second_dir = Eigen::Vector3d::Zero();
         if (second_link) {
-          Eigen::Isometry3d link_transform = reference_transform * current_state.getGlobalLinkTransform(second_link);
-          // RCLCPP_INFO_STREAM(LOGGER, "Second col point: " << (link_transform.inverse()*d.nearest_points[1]).transpose());
+          Eigen::Isometry3d link_transform = current_state.getGlobalLinkTransform(second_link);
           current_state.getJacobian(group, second_link, link_transform.inverse()*d.nearest_points[1], jacobian, false);
-          second_dir = jacobian*delta_theta.matrix();
+          second_dir = reference_transform.linear()*(jacobian*delta_theta.matrix()).block<3, 1>(0, 0);
+          // ss << "\nscp: " << d.link_names[1] << ": " << (link_transform.inverse()*d.nearest_points[1]).transpose()
+          //    << "\nglobal:" << d.nearest_points[1].transpose() << "; dir: " << second_dir.transpose() << " (" << (jacobian*delta_theta.matrix()).block<3, 1>(0, 0).transpose() << ")";
         }
         Eigen::Vector3d approach_dir = first_dir - second_dir;
         double approach_ratio = 0.0;
         const double epsilon = std::numeric_limits<double>::epsilon();
         if (approach_dir.squaredNorm() > 0.0) {
           if (d.normal.squaredNorm() <= epsilon) {
+            if (!next_scene) {
+              auto next_scene = scene->diff();
+              auto &next_state = next_scene->getCurrentStateNonConst();
+              Eigen::VectorXd positions;
+              next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+              next_state.setJointGroupPositions(servo_params.move_group_name, positions + delta_theta.matrix());
+              next_state.updateCollisionBodyTransforms();
+              distance_result.clear();
+              next_scene->getCollisionEnvUnpadded()->distanceRobot(distance_request, distance_result, next_state);
+              next_distances = distance_result.distances;
+              distance_result.clear();
+              next_scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, next_state);
+              for (auto &dist : distance_result.distances)
+                next_distances[dist.first].insert(next_distances[dist.first].end(), dist.second.begin(), dist.second.end());
+            }
             auto &ndist = next_distances[dist.first];
             if (ndist.empty()) {
               d.normal = -approach_dir.normalized();
@@ -205,16 +213,18 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
                                          [&d](const auto &a, const auto &b) {
                 return (a.nearest_points[0] - d.nearest_points[0]).squaredNorm() < (b.nearest_points[0] - d.nearest_points[0]).squaredNorm();
               });
-              current_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+
+              // Eigen::VectorXd positions;
+              // current_state.copyJointGroupPositions(servo_params.move_group_name, positions);
               // ss << "\nCurr positions: " << positions.transpose();
-              // next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
+              // next_scene->getCurrentState().copyJointGroupPositions(servo_params.move_group_name, positions);
               // ss << "\nNext positions: " << positions.transpose();
               // ss << "\nUsing next (previous d had normal " << d.normal.transpose() << ", dist " << d.distance << ")";
               d.normal = nd->normal;
               d.distance = nd->distance;
             }
           }
-          approach_ratio = d.normal.squaredNorm() > epsilon ? (d.normal*(d.distance >= 0.0 ? 1 : -1)).dot(approach_dir)/approach_dir.norm() : 1.0;
+          approach_ratio = d.normal.squaredNorm() > epsilon ? d.normal.dot(approach_dir)/approach_dir.norm() : 1.0;
         }
 
         double vel_scale = pow(std::max(0.0, d.distance)/proximity_threshold, velocity_scale_coefficient); // exp(velocity_scale_coefficient * (d.distance - proximity_threshold));
@@ -222,13 +232,13 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
         vel_scale = std::min(vel_scale < leave_boost ? leave_boost : vel_scale,
                              approach_ratio <= epsilon ? 1.0 : vel_scale/std::max(epsilon, approach_ratio));
         // ss << "\nFirst " << d.link_names[0] << ": " << first_dir.transpose() <<
-        //       "\nSecond " << d.link_names[1] << ": " << second_dir.transpose() <<
-        //       "\nNormal " << d.normal.transpose() << "; dist " << d.distance <<
-        //       "\nApproach dir: " << approach_dir.transpose() << "\nApproach ratio: " << approach_ratio << "\nVelocity scale: " << vel_scale << "\n";
+        //       "\nSecond " << d.link_names[1] << ": " << second_dir.transpose();
+        // ss << "\nNormal " << d.normal.transpose() << "; dist " << d.distance;
+        // ss << "\nApproach dir: " << approach_dir.transpose() << "\nApproach ratio: " << approach_ratio << "\nVelocity scale: " << vel_scale << "\n";
         velocity_scale = std::min(velocity_scale, vel_scale);
       }
     }
-    // if (velocity_scale >= 0.001 && delta_theta.matrix().norm() >= 0.001)
+    // if (/*velocity_scale >= 0.001 && */delta_theta.matrix().norm() >= 0.001)
     //   RCLCPP_INFO_STREAM(LOGGER, ss.str());
   }
 

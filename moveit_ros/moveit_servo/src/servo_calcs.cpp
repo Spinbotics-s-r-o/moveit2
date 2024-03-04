@@ -1072,15 +1072,19 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   for (int i = 0; i < delta_theta.rows(); i++) {
     const auto &limit_it = movement_limits_.joint_limits.find(joint_model_names[i]);
     if (limit_it != movement_limits_.joint_limits.end()) {
-      double v = delta_theta[i]/servo_params_.publish_period;
+      double next_vel = delta_theta[i]/servo_params_.publish_period;
       const auto &limit = limit_it->second.max_acceleration;
       double current_vel = current_joint_state_.velocity[i];
-      double acc = std::abs(v - current_vel)/servo_params_.publish_period;
+      double acc = std::abs(next_vel - current_vel)/servo_params_.publish_period;
       if (acc > limit) {
-        RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting joint %d acc (%lf %lf -> %lf > %lf) -> %lf", i, v, current_vel, acc, limit,
-                    current_vel + limit*servo_params_.publish_period*(v < current_vel ? -1.0 : 1.0));
-        v = current_vel + limit*servo_params_.publish_period*(v < current_vel ? -1.0 : 1.0);
-        delta_theta[i] = v*servo_params_.publish_period;
+        RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting joint %d acc (%lf %lf -> %lf > %lf) -> %lf", i, next_vel, current_vel, acc, limit,
+                    current_vel + limit*servo_params_.publish_period*(next_vel < current_vel ? -1.0 : 1.0));
+        double v = current_vel + limit*servo_params_.publish_period*(next_vel < current_vel ? -1.0 : 1.0);
+        Eigen::Map<Eigen::ArrayXd> current_vels(current_joint_state_.velocity.data(), current_joint_state_.velocity.size());
+
+        // vels = current_vels + k*(next_vels - current_vels)
+        double k = (v - current_vel)/(next_vel - current_vel);
+        delta_theta = (current_vels + k*(delta_theta/servo_params_.publish_period - current_vels))*servo_params_.publish_period;
       }
     }
   }
