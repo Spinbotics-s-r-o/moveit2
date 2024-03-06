@@ -597,6 +597,7 @@ bool distanceCallback(fcl::CollisionObjectd* o1, fcl::CollisionObjectd* o2, void
     dist_result.body_types[1] = res_cd2->type;
     if (cdata->req->enable_nearest_points)
     {
+      // Note: if distance <= 0, the nearest_points are both zeros
       dist_result.normal = (dist_result.nearest_points[1] - dist_result.nearest_points[0]).normalized();
     }
 
@@ -646,7 +647,7 @@ bool distanceCallback(fcl::CollisionObjectd* o1, fcl::CollisionObjectd* o2, void
 #endif
 
           // Check order of o1/o2 again, we might need to flip the normal
-          if (contact.o1 == o1->collisionGeometry().get())
+          if (contact.o1 == fcl_result.o1)
           {
             dist_result.normal = normal;
           }
