@@ -577,7 +577,9 @@ void ServoCalcs::calculateSingleIteration()
   {
     // When a joint_trajectory_controller receives a new command, a stamp of 0 indicates "begin immediately"
     // See http://wiki.ros.org/joint_trajectory_controller#Trajectory_replacement
-    joint_trajectory->header.stamp = rclcpp::Time(0);
+
+    // node_->now() can be used for rqt_plotting, but header should be removed in joint_trajectory_controller.cpp callback (currently line 700)
+    joint_trajectory->header.stamp = rclcpp::Time(0);  // node_->now();
     *last_sent_command_ = *joint_trajectory;
     trajectory_outgoing_cmd_pub_->publish(std::move(joint_trajectory));
   }
@@ -730,7 +732,16 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
         tip_frame_target_poses.back().orientation.w = std::numeric_limits<double>::infinity();
       }
     }
-    if (ik_solver_->searchPositionIK(tip_frame_target_poses, current_joint_state_.position, servo_params_.publish_period / 2.0,
+    std::vector<double> next_positions_with_current_vel(num_joints_);
+    Eigen::Map<Eigen::VectorXd> next_positions_with_current_vel_eigen(next_positions_with_current_vel.data(), num_joints_);
+    next_positions_with_current_vel_eigen = Eigen::Map<Eigen::VectorXd>(current_joint_state_.position.data(), num_joints_);
+    Eigen::VectorXd last_delta_theta;
+    if (last_sent_command_->points.back().velocities.size() == num_joints_) {
+      last_delta_theta = Eigen::Map<Eigen::VectorXd>(last_sent_command_->points.back().velocities.data(), num_joints_)*servo_params_.publish_period;
+      next_positions_with_current_vel_eigen += last_delta_theta;
+    }
+
+    if (ik_solver_->searchPositionIK(tip_frame_target_poses, next_positions_with_current_vel, servo_params_.publish_period / 2.0,
                                      std::vector<double>(), solution, kinematics::KinematicsBase::IKCallbackFn(), err, opts))
     {
       // find the difference in joint positions that will get us to the desired pose
@@ -746,10 +757,11 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
       //   auto next_tip_frame = solution_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
       //       solution_state.getGlobalLinkTransform(ee_frame_id_);
       //   RCLCPP_INFO_STREAM(LOGGER,
-      //                      "orig_theta\n" << current_joint_state_.position << "\norig_x\n"
+      //                      "orig_theta\n" << current_joint_state_.position << "\norig_theta+last_delta_theta\n" << next_positions_with_current_vel << "\norig_x\n"
       //                                     << ik_base_to_tip_frame_.matrix() <<
       //                                     "\nsolution_theta\n" << solution << "\nsolution_x\n"
       //                                     << next_tip_frame.matrix() << "\ndelta_theta\n" << delta_theta_
+      //                                     << "\nlast delta_theta\n" << last_delta_theta
       //                                     << "\ntarget_pose\n" << geometry_msgs::msg::to_yaml(next_pose));
       // }
       // ////////////////////////////
@@ -775,7 +787,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
 
     if (daik && drift_dimensions_[3] && drift_dimensions_[4] && drift_dimensions_[5]) {
       daik->setOrientationVsPositionWeight(0);
-      if (ik_solver_->searchPositionIK(tip_frame_target_poses, current_joint_state_.position, servo_params_.publish_period / 2.0,
+      if (ik_solver_->searchPositionIK(tip_frame_target_poses, next_positions_with_current_vel, servo_params_.publish_period / 2.0,
                                      std::vector<double>(), solution, kinematics::KinematicsBase::IKCallbackFn(), err, opts))
       {
         Eigen::VectorXd delta_theta_pos(jacobian.cols());
@@ -954,7 +966,8 @@ double ServoCalcs::solutionScore(
     *direction_error = dir_error;
 //    RCLCPP_INFO_STREAM(LOGGER, "\ndelta_x\n" << delta_x << "\ndesired_delta_x\n" << desired_delta_x << "\nprojected\n" << desired_delta_x*delta_x_proj_multiplier <<
 //      "\nproj: " << delta_x_proj_multiplier << "\n");
-//    RCLCPP_INFO(LOGGER, "%s dir error: %lf", name.c_str(), dir_error);
+//     if (desired_delta_x.any())
+//       RCLCPP_INFO(LOGGER, "%s dir error: %lf", name.c_str(), dir_error);
     direction_error_scale = pow(1 + dir_error, -servo_params_.ik_direction_error_slowdown_factor);
   }
 
@@ -973,8 +986,9 @@ double ServoCalcs::solutionScore(
 
     delta_x << xyz[0], xyz[1], xyz[2], axis[0]*angle, axis[1]*angle, axis[2]*angle;
     delta_x /= lookahead_interval;
-    // RCLCPP_INFO_STREAM(LOGGER,
-    //                    name << "\nnext_tip_frame\n" << next_tip_frame.matrix() << "\ncurrent_tip_frame\n" << ik_base_to_tip_frame_.matrix() << "\ndelta_x\n" << delta_x);
+    // if (desired_delta_x.any())
+    //   RCLCPP_INFO_STREAM(LOGGER,
+    //                      name << "\nnext_tip_frame\n" << next_tip_frame.matrix() << "\ncurrent_tip_frame\n" << ik_base_to_tip_frame_.matrix() << "\ndelta_x\n" << delta_x);
   }
   for (size_t i = 0, j = 0; i < drift_dimensions_.size(); i++)
     if (!drift_dimensions_[i]) {
