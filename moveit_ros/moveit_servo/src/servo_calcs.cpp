@@ -1000,7 +1000,7 @@ double ServoCalcs::solutionScore(
       j++;
     }
   score_nondrift = sqrt(score_nondrift)/delta_x_norm_weighted;
-  double score_theta = limits_scale*direction_error_scale*Eigen::VectorXd(delta_theta).norm();
+  double score_theta = std::max(std::numeric_limits<double>::epsilon(), limits_scale*direction_error_scale*Eigen::VectorXd(delta_theta).norm())/delta_x.norm();
   double score =
     score_drift*servo_params_.ik_vs_jacobi_drifting_error_weight + 
     score_nondrift*servo_params_.ik_vs_jacobi_nondrifting_error_weight +

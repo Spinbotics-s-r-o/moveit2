@@ -394,7 +394,7 @@ servo:
 
   ik_vs_jacobi_theta_weight: {
     type: double,
-    default_value: 10.0,
+    default_value: 0.001,
     description: "Ratio of joints movement magnitude in competition whether to use inverse kinematics solution or inverse jacobi"
   }
 
