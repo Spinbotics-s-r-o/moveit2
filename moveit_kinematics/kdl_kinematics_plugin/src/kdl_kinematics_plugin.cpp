@@ -428,8 +428,8 @@ int KDLKinematicsPlugin::CartToJnt(KDL::ChainIkSolverVelMimicSVD& ik_solver, con
     // check norms of position and orientation errors
     const double position_error = delta_twist.vel.Norm();
     const double orientation_error = ik_solver.isPositionOnly() ? 0 : delta_twist.rot.Norm();
-    const double delta_twist_norm = std::max(position_error, orientation_error);
-    if (delta_twist_norm <= params_.epsilon)
+    const double delta_twist_norm = std::max(position_error, orientation_error*(params_.epsilon / params_.orientation_epsilon));
+    if (position_error <= params_.epsilon && orientation_error <= params_.orientation_epsilon)
     {
       success = true;
       break;

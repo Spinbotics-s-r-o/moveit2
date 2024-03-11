@@ -33,6 +33,15 @@ kdl_kinematics:
     }
   }
 
+  orientation_epsilon: {
+    type: double,
+    default_value: 0.001,
+    description: "orientation_epsilon. Default is 1e-3",
+    validation: {
+      gt<>: [ 0.0 ]
+    }
+  }
+
   orientation_vs_position: {
     type: double,
     default_value: 1.0,
