@@ -445,3 +445,39 @@ servo:
     default_value: "",
     description: "Yaml file with end effector position/velocity limits and joint velocity limits"
   }
+
+  allow_deviation: {
+    type: bool,
+    default_value: true,
+    description: "If true, servo will allow overpassing singularities at the cost of accuracy"
+  }
+
+  ik_singularity_penalty_type: {
+    type: string,
+    default_value: "none",
+    description: "The type of command that servo will publish",
+    validation: {
+      one_of<>: [["none", "svd", "theta_x_ratio"]]
+    }
+  }
+
+  velocity_blending_factor_reserve: {
+    type: double,
+    default_value: 0.8,
+    description: "A small reserve that keeps joint acceleration slightly under limits when abruptly changing desired velocity, \
+                  since we don't a priori know what solution will be brought by IK",
+  }
+
+  min_velocity_blending_rate: {
+    type: double,
+    default_value: 2.0,
+    description: "Minimum rate at which velocity blending is applied. The minimal blend update is computed as \
+                  publish_period^2*linear_or_rotational_scale*min_velocity_blending_rate, \
+                  i.e. value 2.0 means that robot will stop from full speed to 0.0 in at most 0.5 (=1/2.0) seconds",
+  }
+
+  max_joint_velocity_to_consider_halted: {
+    type: double,
+    default_value: 0.001,
+    description: "If the velocities of all joints are below this value, the robot is considered to be halted and position is held (not just previous desired line)"
+  }

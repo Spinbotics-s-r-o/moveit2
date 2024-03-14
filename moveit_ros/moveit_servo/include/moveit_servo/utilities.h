@@ -71,7 +71,16 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
                                            const double hard_stop_singularity_threshold,
                                            const double lower_singularity_threshold,
                                            const double leaving_singularity_threshold_multiplier,
-                                           const moveit::core::RobotStatePtr& current_state, StatusCode& status);
+                                           const moveit::core::RobotStateConstPtr& current_state, StatusCode& status);
+
+double velocityScalingFactorForSingularity(const Eigen::VectorXd& delta_theta,
+                                           const Eigen::MatrixXd& jacobian,
+                                           const Eigen::VectorXd& commanded_twist,
+                                           const double hard_stop_singularity_threshold,
+                                           const double lower_singularity_threshold,
+                                           const double leaving_singularity_threshold_multiplier,
+                                           const moveit::core::JointModelGroup* joint_model_group,
+                                           const moveit::core::RobotStateConstPtr& current_state, StatusCode& status);
 
 /** \brief Joint-wise update of a sensor_msgs::msg::JointState with given delta's
  * Also filters and calculates the previous velocity
@@ -100,9 +109,15 @@ void transformTwistToPlanningFrame(geometry_msgs::msg::TwistStamped& cmd, const 
  * @param base_to_tip_frame_transform The transform from base of the robot to its end-effector
  * @return Returns the resulting pose after applying delta_x
  */
-geometry_msgs::msg::Pose poseFromCartesianDelta(const Eigen::VectorXd& delta_x,
+Eigen::Isometry3d poseFromCartesianDelta(const Eigen::VectorXd& delta_x,
                                                 const Eigen::Isometry3d& base_to_tip_frame_transform,
                                                 double lookahead_interval);
+
+Eigen::VectorXd cartesianDeltaFromPoses(const Eigen::Isometry3d& pose_start, const Eigen::Isometry3d& pose_end,
+                                         double lookahead_interval);
+
+Eigen::Isometry3d closestPoseOnLine(const Eigen::Isometry3d& line_start, const Eigen::VectorXd& line_delta,
+                                    const Eigen::Isometry3d& pose);
 
 /**
  * @brief Computes the velocity scaling factor based on the joint velocity limits

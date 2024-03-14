@@ -60,7 +60,7 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
                                            const double hard_stop_singularity_threshold,
                                            const double lower_singularity_threshold,
                                            const double leaving_singularity_threshold_multiplier,
-                                           const moveit::core::RobotStatePtr& current_state, StatusCode& status)
+                                           const moveit::core::RobotStateConstPtr& current_state, StatusCode& status)
 {
   double velocity_scale = 1;
   std::size_t num_dimensions = commanded_twist.size();
@@ -85,8 +85,9 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
   Eigen::VectorXd new_theta;
   current_state->copyJointGroupPositions(joint_model_group, new_theta);
   new_theta += pseudo_inverse * delta_x;
-  current_state->setJointGroupPositions(joint_model_group, new_theta);
-  Eigen::MatrixXd new_jacobian = current_state->getJacobian(joint_model_group);
+  auto robot_state = *current_state;
+  robot_state.setJointGroupPositions(joint_model_group, new_theta);
+  Eigen::MatrixXd new_jacobian = robot_state.getJacobian(joint_model_group);
 
   Eigen::JacobiSVD<Eigen::MatrixXd> new_svd(new_jacobian);
   double new_condition = new_svd.singularValues()(0) / new_svd.singularValues()(new_svd.singularValues().size() - 1);
@@ -104,7 +105,7 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
                                      (hard_stop_singularity_threshold - lower_singularity_threshold) *
                                              leaving_singularity_threshold_multiplier +
                                          lower_singularity_threshold;
-  if ((ini_condition > lower_singularity_threshold) && (ini_condition < hard_stop_singularity_threshold))
+  if ((ini_condition > lower_singularity_threshold) && (ini_condition < upper_threshold))
   {
     velocity_scale =
         1. - (ini_condition - lower_singularity_threshold) / (upper_threshold - lower_singularity_threshold);
@@ -113,12 +114,65 @@ double velocityScalingFactorForSingularity(const moveit::core::JointModelGroup* 
   }
 
   // Very close to singularity, so halt.
-  else if (ini_condition >= hard_stop_singularity_threshold)
+  else if (ini_condition >= upper_threshold)
   {
     velocity_scale = 0;
     status = StatusCode::HALT_FOR_SINGULARITY;
   }
 
+  return velocity_scale;
+}
+
+double velocityScalingFactorForSingularity(const Eigen::VectorXd& delta_theta,
+                                           const Eigen::MatrixXd& jacobian,
+                                           const Eigen::VectorXd& commanded_twist,
+                                           const double hard_stop_singularity_threshold,
+                                           const double lower_singularity_threshold,
+                                           const double leaving_singularity_threshold_multiplier,
+                                           const moveit::core::JointModelGroup* joint_model_group,
+                                           const moveit::core::RobotStateConstPtr& current_state, StatusCode& status)
+{
+  double velocity_scale = 1;
+  Eigen::VectorXd delta_x = jacobian * delta_theta;
+  double compliance_factor = delta_x.dot(commanded_twist)/std::max(std::numeric_limits<double>::epsilon(), sqrt(delta_x.squaredNorm()*commanded_twist.squaredNorm()));
+  delta_x *= std::max(0.0, compliance_factor);
+  double ini_condition = sqrt(std::max(std::numeric_limits<double>::epsilon(), delta_theta.squaredNorm())/delta_x.squaredNorm());
+  if (commanded_twist.norm() > 0.0003)
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "ini_condition: " << ini_condition << " compliance_factor: " << compliance_factor <<
+                       "\ndelta_x: " << delta_x.transpose() << "\ncommanded_twist: " << commanded_twist.transpose() << "\ndelta_theta: " << delta_theta.transpose() << "\n");
+
+  Eigen::VectorXd new_theta;
+  current_state->copyJointGroupPositions(joint_model_group, new_theta);
+  new_theta += delta_theta;
+  auto robot_state = *current_state;
+  robot_state.setJointGroupPositions(joint_model_group, new_theta);
+  Eigen::MatrixXd new_jacobian = robot_state.getJacobian(joint_model_group);
+  Eigen::VectorXd new_delta_x = new_jacobian * delta_theta;
+  double new_compliance_factor = new_delta_x.dot(commanded_twist)/std::max(std::numeric_limits<double>::epsilon(), sqrt(new_delta_x.squaredNorm()*commanded_twist.squaredNorm()));
+  new_delta_x *= std::max(0.0, new_compliance_factor);
+  double new_condition = sqrt(std::max(std::numeric_limits<double>::epsilon(), delta_theta.squaredNorm())/new_delta_x.squaredNorm());
+  bool approaching_singularity = new_condition >= ini_condition;
+  if (commanded_twist.norm() > 0.0003)
+    RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "new_condition: " << new_condition << " new_compliance_factor: " << new_compliance_factor <<
+                       "\nnew_delta_x: " << new_delta_x.transpose());
+
+  // see https://github.com/ros-planning/moveit2/pull/620#issuecomment-1201418258 for visual explanation of algorithm
+  double upper_threshold = approaching_singularity ? hard_stop_singularity_threshold :
+                           (hard_stop_singularity_threshold - lower_singularity_threshold) *
+                           leaving_singularity_threshold_multiplier +
+                           lower_singularity_threshold;
+  if ((ini_condition > lower_singularity_threshold) && (ini_condition < upper_threshold))
+  {
+    velocity_scale =
+        1. - (ini_condition - lower_singularity_threshold) / (upper_threshold - lower_singularity_threshold);
+    status =
+        approaching_singularity ? StatusCode::DECELERATE_FOR_APPROACHING_SINGULARITY : StatusCode::DECELERATE_FOR_LEAVING_SINGULARITY;
+  }
+  else if (ini_condition >= upper_threshold)
+  {
+    velocity_scale = 0;
+    status = StatusCode::HALT_FOR_SINGULARITY;
+  }
   return velocity_scale;
 }
 
@@ -184,50 +238,44 @@ void transformTwistToPlanningFrame(geometry_msgs::msg::TwistStamped& cmd, const 
   cmd.twist.angular.z = angular_vector(2);
 }
 
-geometry_msgs::msg::Pose poseFromCartesianDelta(const Eigen::VectorXd& delta_x,
+Eigen::Isometry3d poseFromCartesianDelta(const Eigen::VectorXd& delta_x,
                                                 const Eigen::Isometry3d& base_to_tip_frame_transform,
                                                 double lookahead_interval)
 {
-    // get a transformation matrix with the desired position change &
-    // get a transformation matrix with desired orientation change
-    Eigen::Isometry3d tf_pos_delta(Eigen::Isometry3d::Identity());
-    
-    tf_pos_delta.translate(Eigen::Vector3d(delta_x[0], delta_x[1], delta_x[2]) * lookahead_interval);
+  // get a transformation matrix with the desired position change &
+  Eigen::Isometry3d tf_pos_delta(Eigen::Isometry3d::Identity());
+  tf_pos_delta.translate(Eigen::Vector3d(delta_x[0], delta_x[1], delta_x[2]) * lookahead_interval);
 
-    Eigen::Isometry3d tf_rot_delta(Eigen::Isometry3d::Identity());
-    // Eigen::Quaterniond q = Eigen::AngleAxisd(delta_x[3] * lookahead_interval, Eigen::Vector3d::UnitX()) *
-    //                        Eigen::AngleAxisd(delta_x[4] * lookahead_interval, Eigen::Vector3d::UnitY()) *
-    //                        Eigen::AngleAxisd(delta_x[5] * lookahead_interval, Eigen::Vector3d::UnitZ());
-    Eigen::Vector3d delta_rot;
-    delta_rot << delta_x[3], delta_x[4], delta_x[5];
-    double angle = delta_rot.norm();
-    Eigen::Vector3d axis = angle == 0 ? Eigen::Vector3d(Eigen::Vector3d::UnitZ()) : Eigen::Vector3d(delta_rot/angle);
-    Eigen::Quaterniond q(Eigen::AngleAxisd(angle * lookahead_interval, axis));
-    tf_rot_delta.rotate(q);
+  // get a transformation matrix with desired orientation change
+  Eigen::Vector3d delta_rot(delta_x[3], delta_x[4], delta_x[5]);
+  double angle = delta_rot.norm();
+  Eigen::Vector3d axis = angle == 0 ? Eigen::Vector3d(Eigen::Vector3d::UnitZ()) : Eigen::Vector3d(delta_rot/angle);
+  Eigen::Isometry3d tf_rot_delta(Eigen::Isometry3d::Identity());
+  tf_rot_delta.rotate(Eigen::AngleAxisd(angle * lookahead_interval, axis));
 
-    // Poses passed to IK solvers are assumed to be in some tip link (usually EE) reference frame
-    // First, find the new tip link position without newly applied rotation
+  auto tf_result = tf_pos_delta * base_to_tip_frame_transform;
+  tf_result.linear() = tf_rot_delta.linear() * tf_result.linear();
+  return tf_result;
+}
 
-    auto tf_no_new_rot = tf_pos_delta * base_to_tip_frame_transform;
-    // we want the rotation to be applied in the requested reference frame,
-    // but we want the rotation to be about the EE point in space, not the origin.
-    // So, we need to translate to origin, rotate, then translate back
-    // Given T = transformation matrix from origin -> EE point in space (translation component of tf_no_new_rot)
-    // and T' as the opposite transformation, EE point in space -> origin (translation only)
-    // apply final transformation as T * R * T' * tf_no_new_rot
-    auto tf_translation = tf_no_new_rot.translation();
-    auto tf_neg_translation = Eigen::Isometry3d::Identity();  // T'
-    tf_neg_translation(0, 3) = -tf_translation(0, 0);
-    tf_neg_translation(1, 3) = -tf_translation(1, 0);
-    tf_neg_translation(2, 3) = -tf_translation(2, 0);
-    auto tf_pos_translation = Eigen::Isometry3d::Identity();  // T
-    tf_pos_translation(0, 3) = tf_translation(0, 0);
-    tf_pos_translation(1, 3) = tf_translation(1, 0);
-    tf_pos_translation(2, 3) = tf_translation(2, 0);
+Eigen::VectorXd cartesianDeltaFromPoses(const Eigen::Isometry3d& pose_start, const Eigen::Isometry3d& pose_end,
+                                          double lookahead_interval)
+{
+  Eigen::Vector3d pos_diff = (pose_end.translation() - pose_start.translation())/lookahead_interval;
+  Eigen::AngleAxisd rot_diff(pose_start.linear().inverse()*pose_end.linear());
+  rot_diff.axis() = pose_start.linear()*rot_diff.axis();
 
-    // T * R * T' * tf_no_new_rot
-    auto tf = tf_pos_translation * tf_rot_delta * tf_neg_translation * tf_no_new_rot;
-    return tf2::toMsg(tf);
+  Eigen::VectorXd delta_x(6);
+  delta_x << pos_diff, (rot_diff.angle()/lookahead_interval * rot_diff.axis());
+  return delta_x;
+}
+
+Eigen::Isometry3d closestPoseOnLine(const Eigen::Isometry3d& line_start, const Eigen::VectorXd& line_delta,
+                                    const Eigen::Isometry3d& pose)
+{
+  Eigen::VectorXd diff_vector = cartesianDeltaFromPoses(line_start, pose, 1.0);
+  double projection = line_delta.dot(diff_vector);
+  return poseFromCartesianDelta(projection * line_delta, line_start, 1.0);
 }
 
 double getVelocityScalingFactor(const moveit::core::JointModelGroup* joint_model_group, const Eigen::VectorXd& velocity)

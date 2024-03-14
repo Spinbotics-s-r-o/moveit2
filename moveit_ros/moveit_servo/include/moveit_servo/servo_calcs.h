@@ -141,8 +141,8 @@ protected:
   void calculateSingleIteration();
 
   /** \brief Do servoing calculations for Cartesian twist commands. */
-  bool cartesianServoCalcs(geometry_msgs::msg::TwistStamped& cmd,
-                           trajectory_msgs::msg::JointTrajectory& joint_trajectory);
+  bool cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
+                           trajectory_msgs::msg::JointTrajectory& joint_trajectory, int attempts_remaining = 1);
 
   /** \brief Do servoing calculations for direct commands to a joint. */
   bool jointServoCalcs(const control_msgs::msg::JointJog& cmd, trajectory_msgs::msg::JointTrajectory& joint_trajectory);
@@ -166,6 +166,7 @@ protected:
    * @return a vector of position deltas
    */
   Eigen::VectorXd scaleCartesianCommand(const geometry_msgs::msg::TwistStamped& command);
+  geometry_msgs::msg::TwistStamped unscaleCartesianCommand(const Eigen::VectorXd& command);
 
   /** \brief If incoming velocity commands are from a unitless joystick, scale them to physical units.
    * Also, multiply by timestep to calculate a position change.
@@ -198,7 +199,7 @@ protected:
    * @param servo_type The type of servoing command being used
    */
   bool internalServoUpdate(Eigen::ArrayXd& delta_theta, trajectory_msgs::msg::JointTrajectory& joint_trajectory,
-                           const ServoType servo_type);
+                           const ServoType servo_type, int attempts_remaining = 1);
 
   /**
    * Remove the Jacobian row and the delta-x element of one Cartesian dimension, to take advantage of task redundancy
@@ -266,13 +267,17 @@ protected:
   const moveit::core::JointModelGroup* joint_model_group_;
 
   moveit::core::RobotStatePtr current_state_;
+  Eigen::Isometry3d desired_ee_pose_;
+  Eigen::Vector<double, 6> desired_ee_dir_;
+  Eigen::Vector<double, 6> desired_delta_x_;
+  Eigen::Vector<double, 6> last_desired_delta_x_;
 
   // These variables are mutex protected
   // previous_joint_state holds the state q(t - dt)
   // current_joint_state holds the  state q(t) as retrieved from the planning scene monitor.
   // next_joint_state holds the computed state q(t + dt)
 
-  sensor_msgs::msg::JointState previous_joint_state_, current_joint_state_, next_joint_state_;
+  sensor_msgs::msg::JointState previous_joint_state_, current_joint_state_, next_joint_state_, real_joint_state_;
   std::map<std::string, std::size_t> joint_state_name_map_;
 
   // Smoothing algorithm (loads a plugin)

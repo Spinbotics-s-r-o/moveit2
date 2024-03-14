@@ -72,9 +72,6 @@ public:
   void setWorkspaceBounds(Eigen::AlignedBox3d workspace_bounds);
 
 private:
-  /** \brief Get a read-only copy of the planning scene */
-  planning_scene_monitor::LockedPlanningSceneRO getLockedPlanningSceneRO() const;
-
   // Pointer to the ROS node
   const std::shared_ptr<rclcpp::Node> node_;
 

@@ -88,11 +88,6 @@ CollisionCheck::CollisionCheck(const rclcpp::Node::SharedPtr& node,
       node_->create_publisher<std_msgs::msg::Float64>("~/collision_velocity_scale", rclcpp::SystemDefaultsQoS());
 }
 
-planning_scene_monitor::LockedPlanningSceneRO CollisionCheck::getLockedPlanningSceneRO() const
-{
-  return planning_scene_monitor::LockedPlanningSceneRO(planning_scene_monitor_);
-}
-
 double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_theta) const
 {
   // Update the latest parameters
@@ -108,7 +103,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   // Do a timer-safe distance-based collision detection
   collision_detection::CollisionResult collision_result;
   collision_result.clear();
-  auto scene = getLockedPlanningSceneRO();
+  planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
   auto current_state = scene->getCurrentState();
   current_state.updateCollisionBodyTransforms();
   auto distance_request = distance_request_;
