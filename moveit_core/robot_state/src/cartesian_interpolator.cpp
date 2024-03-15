@@ -110,6 +110,9 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
   double rotation_distance = start_quaternion.angularDistance(target_quaternion);
   double translation_distance = (rotated_target.translation() - start_pose.translation()).norm();
 
+  std::unique_ptr<moveit::core::RobotState> start_state_copy(new moveit::core::RobotState(*start_state));
+  double opposite_dir_multiplier = rotation_distance > 1e-8 ? (2*M_PI - rotation_distance)/rotation_distance : 0.0;
+
   // decide how many steps we will need for this trajectory
   std::size_t translation_steps = 0;
   if (max_step.translation > 0.0)
@@ -176,6 +179,41 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
 
   last_valid_percentage *= checkJointSpaceJump(group, traj, jump_threshold);
 
+  // If planning failed due to joint space jump (probably hit joint limit) try to replan in opposite direction
+  if(last_valid_percentage < 1.0 && opposite_dir_multiplier > 0.0) 
+  {
+    last_valid_percentage = 0.0;
+    steps = steps*opposite_dir_multiplier;
+
+    start_state = start_state_copy.get();
+    traj.clear();
+    traj.push_back(std::make_shared<moveit::core::RobotState>(*start_state));
+    
+    for (std::size_t i = 1; i <= steps; ++i)
+    {
+      double percentage = static_cast<double>(i) / static_cast<double>(steps);
+
+      Eigen::Isometry3d pose(start_quaternion.slerp(-percentage*opposite_dir_multiplier, target_quaternion));
+      pose.translation() = percentage * rotated_target.translation() + (1 - percentage) * start_pose.translation();
+
+      // Explicitly use a single IK attempt only: We want a smooth trajectory.
+      // Random seeding (of additional attempts) would probably create IK jumps.
+      if (start_state->setFromIK(group, pose * offset, link->getName(), consistency_limits, 0.0, validCallback, options,
+                                cost_function))
+      {
+        traj.push_back(std::make_shared<moveit::core::RobotState>(*start_state));
+      }
+      else
+      {
+        break;
+      }
+
+      last_valid_percentage = percentage;
+    }
+
+    last_valid_percentage *= checkJointSpaceJump(group, traj, jump_threshold);
+  }
+
   return CartesianInterpolator::Percentage(last_valid_percentage);
 }
 
@@ -189,12 +227,12 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
   double percentage_solved = 0.0;
   for (std::size_t i = 0; i < waypoints.size(); ++i)
   {
-    // Don't test joint space jumps for every waypoint, test them later on the whole trajectory.
-    static const JumpThreshold NO_JOINT_SPACE_JUMP_TEST;
+    // Don't test joint space jumps for every waypoint, test them later on the whole trajectory. 
+    // static const JumpThreshold NO_JOINT_SPACE_JUMP_TEST;
     std::vector<RobotStatePtr> waypoint_traj;
     double wp_percentage_solved =
         computeCartesianPath(start_state, group, waypoint_traj, link, waypoints[i], global_reference_frame, max_step,
-                             NO_JOINT_SPACE_JUMP_TEST, validCallback, options, cost_function, link_offset);
+                             jump_threshold, validCallback, options, cost_function, link_offset);
     if (fabs(wp_percentage_solved - 1.0) < std::numeric_limits<double>::epsilon())
     {
       percentage_solved = static_cast<double>((i + 1)) / static_cast<double>(waypoints.size());
