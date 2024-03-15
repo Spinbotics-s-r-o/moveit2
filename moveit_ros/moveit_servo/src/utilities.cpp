@@ -137,9 +137,9 @@ double velocityScalingFactorForSingularity(const Eigen::VectorXd& delta_theta,
   double compliance_factor = delta_x.dot(commanded_twist)/std::max(std::numeric_limits<double>::epsilon(), sqrt(delta_x.squaredNorm()*commanded_twist.squaredNorm()));
   delta_x *= std::max(0.0, compliance_factor);
   double ini_condition = sqrt(std::max(std::numeric_limits<double>::epsilon(), delta_theta.squaredNorm())/delta_x.squaredNorm());
-  if (commanded_twist.norm() > 0.0003)
-    RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "ini_condition: " << ini_condition << " compliance_factor: " << compliance_factor <<
-                       "\ndelta_x: " << delta_x.transpose() << "\ncommanded_twist: " << commanded_twist.transpose() << "\ndelta_theta: " << delta_theta.transpose() << "\n");
+  // if (commanded_twist.norm() > 0.0003)
+  //   RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "ini_condition: " << ini_condition << " compliance_factor: " << compliance_factor <<
+  //                      "\ndelta_x: " << delta_x.transpose() << "\ncommanded_twist: " << commanded_twist.transpose() << "\ndelta_theta: " << delta_theta.transpose() << "\n");
 
   Eigen::VectorXd new_theta;
   current_state->copyJointGroupPositions(joint_model_group, new_theta);
@@ -152,9 +152,9 @@ double velocityScalingFactorForSingularity(const Eigen::VectorXd& delta_theta,
   new_delta_x *= std::max(0.0, new_compliance_factor);
   double new_condition = sqrt(std::max(std::numeric_limits<double>::epsilon(), delta_theta.squaredNorm())/new_delta_x.squaredNorm());
   bool approaching_singularity = new_condition >= ini_condition;
-  if (commanded_twist.norm() > 0.0003)
-    RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "new_condition: " << new_condition << " new_compliance_factor: " << new_compliance_factor <<
-                       "\nnew_delta_x: " << new_delta_x.transpose());
+  // if (commanded_twist.norm() > 0.0003)
+  //   RCLCPP_INFO_STREAM(rclcpp::get_logger("servo_utils"), "new_condition: " << new_condition << " new_compliance_factor: " << new_compliance_factor <<
+  //                      "\nnew_delta_x: " << new_delta_x.transpose());
 
   // see https://github.com/ros-planning/moveit2/pull/620#issuecomment-1201418258 for visual explanation of algorithm
   double upper_threshold = approaching_singularity ? hard_stop_singularity_threshold :

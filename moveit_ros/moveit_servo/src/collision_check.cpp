@@ -106,6 +106,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
   auto current_state = scene->getCurrentState();
   current_state.updateCollisionBodyTransforms();
+  current_state.updateLinkTransforms();
   auto distance_request = distance_request_;
   distance_request.acm = &scene->getAllowedCollisionMatrix();
   distance_request.enableGroup(scene->getRobotModel());
@@ -144,14 +145,15 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
 
     planning_scene::PlanningScenePtr next_scene;
     collision_detection::DistanceMap next_distances;
-    auto robot_model = scene->getRobotModel();
+    auto robot_model = current_state.getRobotModel();
     Eigen::MatrixXd jacobian;
 
     for (auto &dist : distances) {
       for (auto &d : dist.second) {
-        // getLinkModel produces warning if not checked using hasLinkModel
-        auto first_link = robot_model->hasLinkModel(d.link_names[0]) ? robot_model->getLinkModel(d.link_names[0]) : nullptr;
-        auto second_link = robot_model->hasLinkModel(d.link_names[1]) ? robot_model->getLinkModel(d.link_names[1]) : nullptr;
+        // isLinkUpdated checks only for the links moved by the group (i.e. all descendants - even outside the group - of the first non-fixed joint).
+        // Other links would cause failure in getJacobian() and thus crash the program.
+        auto first_link = group->isLinkUpdated(d.link_names[0]) ? robot_model->getLinkModel(d.link_names[0]) : nullptr;
+        auto second_link = group->isLinkUpdated(d.link_names[1]) ? robot_model->getLinkModel(d.link_names[1]) : nullptr;
 
         bool is_self_collision = first_link && second_link;
         double proximity_threshold = is_self_collision ? servo_params.self_collision_proximity_threshold : servo_params.scene_collision_proximity_threshold;
@@ -190,6 +192,7 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
               next_state.copyJointGroupPositions(servo_params.move_group_name, positions);
               next_state.setJointGroupPositions(servo_params.move_group_name, positions + delta_theta.matrix());
               next_state.updateCollisionBodyTransforms();
+              next_state.updateLinkTransforms();
               distance_result.clear();
               next_scene->getCollisionEnvUnpadded()->distanceRobot(distance_request, distance_result, next_state);
               next_distances = distance_result.distances;
