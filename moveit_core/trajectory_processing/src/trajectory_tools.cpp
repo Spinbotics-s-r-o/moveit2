@@ -129,7 +129,7 @@ void updateTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory, const s
 
       double v1, v2, a;
 
-      bool start_velocity = false;
+      //bool start_velocity = false;
       if (dt1 == 0.0 || dt2 == 0.0)
       {
         v1 = 0.0;

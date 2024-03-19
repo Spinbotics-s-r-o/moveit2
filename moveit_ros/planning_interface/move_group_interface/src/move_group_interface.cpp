@@ -998,7 +998,7 @@ public:
   double computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double step,
                               double jump_threshold, moveit_msgs::msg::RobotTrajectory& msg,
                               const moveit_msgs::msg::Constraints& path_constraints, bool avoid_collisions,
-                              moveit_msgs::msg::MoveItErrorCodes& error_code, double velocity_scaling_factor, double acceleration_scaling_factor)
+                              moveit_msgs::msg::MoveItErrorCodes& error_code, [[maybe_unused]] double velocity_scaling_factor, [[maybe_unused]] double acceleration_scaling_factor)
   {
     auto req = std::make_shared<spinbot_msgs::srv::GetCartesianPath::Request>();
     spinbot_msgs::srv::GetCartesianPath::Response::SharedPtr response;

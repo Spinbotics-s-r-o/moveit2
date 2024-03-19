@@ -977,7 +977,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
 
 double ServoCalcs::solutionScore(
     const Eigen::VectorXd &delta_theta, const Eigen::VectorXd &desired_delta_x, double delta_x_norm_weighted,
-    const Eigen::MatrixXd &jacobian_full, moveit::core::RobotState &robot_state, double lookahead_interval, const std::string &name,
+    const Eigen::MatrixXd &jacobian_full, moveit::core::RobotState &robot_state, double lookahead_interval, [[maybe_unused]] const std::string &name,
     double *direction_error)
 {
   double score_drift = 1 - velocityScalingFactorForDriftDimensions(delta_theta, jacobian_full, drift_dimensions_,

@@ -179,7 +179,7 @@ double velocityScalingFactorForSingularity(const Eigen::VectorXd& delta_theta,
 bool applyJointUpdate(const double publish_period, const Eigen::ArrayXd& delta_theta,
                       const sensor_msgs::msg::JointState& previous_joint_state,
                       sensor_msgs::msg::JointState& next_joint_state,
-                      pluginlib::UniquePtr<online_signal_smoothing::SmoothingBaseClass>& smoother)
+                      [[maybe_unused]] pluginlib::UniquePtr<online_signal_smoothing::SmoothingBaseClass>& smoother)
 {
   // All the sizes must match
   if (next_joint_state.position.size() != static_cast<std::size_t>(delta_theta.size()) ||
