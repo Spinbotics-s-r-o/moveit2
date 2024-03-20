@@ -180,7 +180,7 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
   last_valid_percentage *= checkJointSpaceJump(group, traj, jump_threshold);
 
   // If planning failed due to joint space jump (probably hit joint limit) try to replan in opposite direction
-  if(last_valid_percentage < 1.0 && opposite_dir_multiplier > 0.0) 
+  if(jump_threshold.factor > 0.0 && last_valid_percentage < 1.0 && opposite_dir_multiplier > 0.0) 
   {
     last_valid_percentage = 0.0;
     steps = steps*opposite_dir_multiplier;
@@ -225,14 +225,14 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
     const Eigen::Isometry3d& link_offset)
 {
   double percentage_solved = 0.0;
+  static const JumpThreshold NO_JOINT_SPACE_JUMP_TEST;
   for (std::size_t i = 0; i < waypoints.size(); ++i)
   {
-    // Don't test joint space jumps for every waypoint, test them later on the whole trajectory. 
-    // static const JumpThreshold NO_JOINT_SPACE_JUMP_TEST;
+    JumpThreshold wp_jump_threshold = waypoints.size() > 1 ? NO_JOINT_SPACE_JUMP_TEST : jump_threshold;
     std::vector<RobotStatePtr> waypoint_traj;
     double wp_percentage_solved =
         computeCartesianPath(start_state, group, waypoint_traj, link, waypoints[i], global_reference_frame, max_step,
-                             jump_threshold, validCallback, options, cost_function, link_offset);
+                             wp_jump_threshold, validCallback, options, cost_function, link_offset);
     if (fabs(wp_percentage_solved - 1.0) < std::numeric_limits<double>::epsilon())
     {
       percentage_solved = static_cast<double>((i + 1)) / static_cast<double>(waypoints.size());
