@@ -74,19 +74,30 @@ public:
 
   double position_;
 
+  void setMinDuration(double min_duration)
+  {
+    min_duration_ = min_duration;
+  }
+  double getMinDuration() const
+  {
+    return min_duration_;
+  }
+
 protected:
   double length_;
+  double min_duration_ = 0.0;
 };
 
 class Path
 {
 public:
-  Path(const std::list<Eigen::VectorXd>& path, double max_deviation = 0.0);
+  Path(const std::list<Eigen::VectorXd>& path, double max_deviation = 0.0, const std::list<double>& min_durations = {});
   Path(const Path& path);
   double getLength() const;
   Eigen::VectorXd getConfig(double s) const;
   Eigen::VectorXd getTangent(double s) const;
   Eigen::VectorXd getCurvature(double s) const;
+  double getMaxVelocity(double s) const;
 
   /** @brief Get the next switching point.
    *  @param[in] s Arc length traveled so far

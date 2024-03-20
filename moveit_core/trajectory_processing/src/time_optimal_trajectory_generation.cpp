@@ -194,7 +194,7 @@ private:
   Eigen::VectorXd y_;
 };
 
-Path::Path(const std::list<Eigen::VectorXd>& path, double max_deviation) : length_(0.0)
+Path::Path(const std::list<Eigen::VectorXd>& path, double max_deviation, const std::list<double>& min_durations) : length_(0.0)
 {
   if (path.size() < 2)
     return;
@@ -202,28 +202,43 @@ Path::Path(const std::list<Eigen::VectorXd>& path, double max_deviation) : lengt
   std::list<Eigen::VectorXd>::const_iterator path_iterator2 = path_iterator1;
   ++path_iterator2;
   std::list<Eigen::VectorXd>::const_iterator path_iterator3;
+  auto min_duration_iterator = min_durations.begin();
   Eigen::VectorXd start_config = *path_iterator1;
   while (path_iterator2 != path.end())
   {
     path_iterator3 = path_iterator2;
     ++path_iterator3;
+    double min_duration = min_duration_iterator == min_durations.end() ? 0.0 : *min_duration_iterator++;
     if (max_deviation > 0.0 && path_iterator3 != path.end())
     {
       CircularPathSegment* blend_segment =
           new CircularPathSegment(0.5 * (*path_iterator1 + *path_iterator2), *path_iterator2,
                                   0.5 * (*path_iterator2 + *path_iterator3), max_deviation);
       Eigen::VectorXd end_config = blend_segment->getConfig(0.0);
-      if ((end_config - start_config).norm() > 0.000001)
+      double estimated_norm = (*path_iterator2 - *path_iterator1).norm();  // we assume that input min_duration is a naive
+                                                                           // estimate based on Euclidean distance
+      double linear_norm = (end_config - start_config).norm();
+      if (linear_norm > 0.000001)
       {
         path_segments_.push_back(std::make_unique<LinearPathSegment>(start_config, end_config));
+        path_segments_.back()->setMinDuration(min_duration*linear_norm/estimated_norm);
       }
       path_segments_.emplace_back(blend_segment);
+      double next_min_duration = min_duration_iterator == min_durations.end() ? 0.0 : *min_duration_iterator;
+      double next_estimated_norm = (*path_iterator3 - *path_iterator2).norm();
+      auto blend_end_config = blend_segment->getConfig(blend_segment->getLength());
+      double circular_norm_first = (*path_iterator2 - end_config).norm();
+      double circular_norm_second = (blend_end_config - *path_iterator2).norm();
+      path_segments_.back()->setMinDuration(min_duration*circular_norm_first/estimated_norm + next_min_duration*circular_norm_second/next_estimated_norm);
 
-      start_config = blend_segment->getConfig(blend_segment->getLength());
+      start_config = blend_end_config;
     }
     else
     {
       path_segments_.push_back(std::make_unique<LinearPathSegment>(start_config, *path_iterator2));
+      double estimated_norm = (*path_iterator2 - *path_iterator1).norm();
+      double linear_norm = (*path_iterator2 - start_config).norm();
+      path_segments_.back()->setMinDuration(min_duration*linear_norm/estimated_norm);
       start_config = *path_iterator2;
     }
     path_iterator1 = path_iterator2;
@@ -292,6 +307,17 @@ Eigen::VectorXd Path::getCurvature(double s) const
 {
   const PathSegment* path_segment = getPathSegment(s);
   return path_segment->getCurvature(s);
+}
+
+double Path::getMaxVelocity(double s) const
+{
+  const PathSegment* path_segment = getPathSegment(s);
+  double min_duration = path_segment->getMinDuration();
+  // we assume that minimum duration was set by a naive approach that uses a simple start/end distance and max end effector velocity
+  auto start = path_segment->getConfig(0);
+  auto end = path_segment->getConfig(path_segment->getLength());
+  double result = std::max(std::numeric_limits<double>::epsilon(), (end - start).norm()) / min_duration;
+  return result;
 }
 
 double Path::getNextSwitchingPoint(double s, bool& discontinuity) const
@@ -739,7 +765,7 @@ double Trajectory::getAccelerationMaxPathVelocity(double path_pos) const
 double Trajectory::getVelocityMaxPathVelocity(double path_pos) const
 {
   const Eigen::VectorXd tangent = path_.getTangent(path_pos);
-  double max_path_velocity = std::numeric_limits<double>::max();
+  double max_path_velocity = path_.getMaxVelocity(path_pos);  // std::numeric_limits<double>::max();
   for (unsigned int i = 0; i < joint_num_; ++i)
   {
     max_path_velocity = std::min(max_path_velocity, max_velocity_[i] / std::abs(tangent[i]));
@@ -756,18 +782,37 @@ double Trajectory::getAccelerationMaxPathVelocityDeriv(double path_pos)
 double Trajectory::getVelocityMaxPathVelocityDeriv(double path_pos)
 {
   const Eigen::VectorXd tangent = path_.getTangent(path_pos);
-  double max_path_velocity = std::numeric_limits<double>::max();
-  unsigned int active_constraint;
+  double max_path_velocity = path_.getMaxVelocity(path_pos);  // std::numeric_limits<double>::max();
+  unsigned int active_constraint = std::numeric_limits<unsigned int>::max();
+  unsigned int max_tangent_index;
+  double max_tangent = -1.0;
   for (unsigned int i = 0; i < joint_num_; ++i)
   {
+    double abs_tangent = std::abs(tangent[i]);
     const double this_max_path_velocity = max_velocity_[i] / std::abs(tangent[i]);
     if (this_max_path_velocity < max_path_velocity)
     {
       max_path_velocity = this_max_path_velocity;
       active_constraint = i;
     }
+    if (abs_tangent > max_tangent)
+    {
+      // if we are bounded by total path max velocity, we use the joint with the largest magnitude
+      max_tangent = abs_tangent;
+      max_tangent_index = i;
+    }
   }
-  return -(max_velocity_[active_constraint] * path_.getCurvature(path_pos)[active_constraint]) /
+  double constraint_max_velocity;
+  if (active_constraint == std::numeric_limits<unsigned int>::max())
+  {
+    // if we are bounded by total path max velocity, we use the joint with the largest magnitude
+    // TODO: a proper way to handle this would be to use all joints at once
+    active_constraint = max_tangent_index;
+    constraint_max_velocity = max_path_velocity*max_tangent;
+  }
+  else
+    constraint_max_velocity = max_velocity_[active_constraint];
+  return -(constraint_max_velocity * path_.getCurvature(path_pos)[active_constraint]) /
          (tangent[active_constraint] * std::abs(tangent[active_constraint]));
 }
 
@@ -1125,6 +1170,8 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   // Have to convert into Eigen data structs and remove repeated points
   //  (https://github.com/tobiaskunz/trajectories/issues/3)
   std::list<Eigen::VectorXd> points;
+  std::list<double> min_durations;
+  double current_segment_duration = 0.0;
   for (size_t p = 0; p < num_points; ++p)
   {
     moveit::core::RobotStatePtr waypoint = trajectory.getWayPointPtr(p);
@@ -1145,13 +1192,21 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
     if (diverse_point)
     {
       points.push_back(new_point);
+      if (p != 0) {
+        min_durations.push_back(current_segment_duration + trajectory.getWayPointDurationFromPrevious(p));
+        current_segment_duration = 0;
+      }
       // If the last point is not a diverse_point we replace the last added point with it to make sure to always have
       // the input end point as the last point
     }
     else if (p == num_points - 1)
     {
       points.back() = new_point;
+      if (p != 0)
+        min_durations.back() += current_segment_duration + trajectory.getWayPointDurationFromPrevious(p);
     }
+    else  // p > 0
+      current_segment_duration += trajectory.getWayPointDurationFromPrevious(p);
   }
 
   // Return trajectory with only the first waypoint if there are not multiple diverse points
@@ -1166,7 +1221,7 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   }
 
   // Now actually call the algorithm
-  Trajectory parameterized(Path(points, path_tolerance_), max_velocity, max_acceleration, DEFAULT_TIMESTEP);
+  Trajectory parameterized(Path(points, path_tolerance_, min_durations), max_velocity, max_acceleration, DEFAULT_TIMESTEP);
   if (!parameterized.isValid())
   {
     RCLCPP_ERROR(LOGGER, "Unable to parameterize trajectory.");

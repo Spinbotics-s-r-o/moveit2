@@ -138,18 +138,18 @@ void updateTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory, const s
       }
       else
       {
-        /*if (i == 0)
-        {
-          if (curr_waypoint->hasVelocities())
-          {
-            start_velocity = true;
-            v1 = curr_waypoint->getVariableVelocity(idx[j]);
-          }
-        }*/
+        // if (i == 0)
+        // {
+        //   if (curr_waypoint->hasVelocities())
+        //   {
+        //     start_velocity = true;
+        //     v1 = curr_waypoint->getVariableVelocity(idx[j]);
+        //   }
+        // }
+        // v1 = start_velocity ? v1 : (q2 - q1) / dt1;
+        // v2 = start_velocity ? v1 : (q3 - q2) / dt2;  // Needed to ensure continuous velocity for first point
         v1 = (q2-q1)/dt1;
-        //v1 = start_velocity ? v1 : (q2 - q1) / dt1;
         v2 = (q3-q2)/dt2;
-        //v2 = start_velocity ? v1 : (q3 - q2) / dt2;  // Needed to ensure continuous velocity for first point
         a = 2.0 * (v2 - v1) / (dt1 + dt2);
       }
 

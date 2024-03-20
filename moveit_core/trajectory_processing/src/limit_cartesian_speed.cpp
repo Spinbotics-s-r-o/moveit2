@@ -109,7 +109,8 @@ bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, c
     euclidean_distance = (next_link_state.translation() - current_link_state.translation()).norm();
 
     new_time_diff = (euclidean_distance / max_speed);
-    old_time_diff = trajectory.getWayPointDurationFromPrevious(i + 1);
+    // we're overwriting the old time diff, since we assume that timing is not yet set (will be assigned subsequently via TOTG), and thus invalid values are present
+    old_time_diff = 0.0;  // trajectory.getWayPointDurationFromPrevious(i + 1);
 
     // slow-down segment if it was too fast before
     time_diff[i] = std::max(new_time_diff, old_time_diff);
