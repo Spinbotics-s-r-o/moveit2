@@ -480,6 +480,13 @@ void ServoCalcs::calculateSingleIteration()
   real_joint_state_ = current_joint_state_;
   real_state->copyJointGroupPositions(joint_model_group_, real_joint_state_.position);
   real_state->copyJointGroupVelocities(joint_model_group_, real_joint_state_.velocity);
+  // if ((Eigen::Map<Eigen::VectorXd>(real_joint_state_.position.data(), real_joint_state_.position.size()) -
+  //      Eigen::Map<Eigen::VectorXd>(current_joint_state_.position.data(), current_joint_state_.position.size())).norm() > 0.01)
+  // {
+  //   RCLCPP_WARN(LOGGER, "Joint state from planning scene monitor is different from current state");
+  //   RCLCPP_INFO_STREAM(LOGGER, "\nreal_join_state\n" << sensor_msgs::msg::to_yaml(real_joint_state_) <<
+  //                              "\ncurrent_joint_state\n" << sensor_msgs::msg::to_yaml(current_joint_state_));
+  // }
   for (size_t i = 0; i < real_joint_state_.position.size(); i++) {
     current_joint_state_.position[i] =
         (1.0 - servo_params_.joint_state_aligning_factor)*current_joint_state_.position[i] +
@@ -715,7 +722,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
   auto next_pose_eigen = poseFromCartesianDelta(delta_x, desired_base_to_tip_frame_transform, lookahead_interval);
   delta_x = cartesianDeltaFromPoses(base_to_tip_frame_transform, next_pose_eigen, lookahead_interval);
   // // for debug logging only //
-  // if (delta_x.any())
+  // if (desired_delta_x_.any())
   //   debug_ss << "\ndelta_x_to_desired\n" << delta_x << "\npose_desired\n" << desired_base_to_tip_frame_transform.matrix() << "\nnext_pose_desired\n" << next_pose_eigen.matrix();
   // ////////////////////////////
 
@@ -1616,11 +1623,12 @@ void ServoCalcs::eeFrameIdCB(const std_msgs::msg::String::ConstSharedPtr& msg)
 void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg)
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  // if (!latest_twist_stamped_ || msg->twist != latest_twist_stamped_->twist)
+  //   RCLCPP_INFO_STREAM(LOGGER, "received twist\n" << geometry_msgs::msg::to_yaml(*msg));
   latest_twist_stamped_ = msg;
 
   if (msg->header.stamp != rclcpp::Time(0.))
     latest_twist_command_stamp_ = msg->header.stamp;
-  // RCLCPP_INFO(LOGGER, "received twist %lf", rclcpp::Time(msg->header.stamp).seconds());
 
   // notify that we have a new input
   new_input_cmd_ = true;
@@ -1630,6 +1638,8 @@ void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSha
 void ServoCalcs::jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& msg)
 {
   const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  // if (!latest_joint_cmd_ || msg->velocities != latest_joint_cmd_->velocities)
+  //   RCLCPP_INFO_STREAM(LOGGER, "received joint jog\n" << control_msgs::msg::to_yaml(*msg));
   latest_joint_cmd_ = msg;
 
   if (msg->header.stamp != rclcpp::Time(0.))
