@@ -183,16 +183,16 @@ bool MoveGroupCartesianPathService::computeService(
           for (const moveit::core::RobotStatePtr& traj_state : traj)
             rt.addSuffixWayPoint(traj_state, 0.0);
 
-          // time trajectory
-          trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
-          time_param.computeTimeStamps(rt, req->max_velocity_scaling_factor, req->max_acceleration_scaling_factor);
-
-          // optionally compute timing to move the eef with constant speed
+          // optionally compute minimal timing to move the eef with bounded speed
           if (req->max_cartesian_speed > 0.0)
           {
             trajectory_processing::limitMaxCartesianLinkSpeed(rt, req->max_cartesian_speed,
                                                               req->cartesian_speed_limited_link);
           }
+
+          // time trajectory
+          trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
+          time_param.computeTimeStamps(rt, req->max_velocity_scaling_factor, req->max_acceleration_scaling_factor);
 
           rt.getRobotTrajectoryMsg(res->solution);
           RCLCPP_INFO(LOGGER, "Computed Cartesian path with %u points (followed %lf%% of requested trajectory)",
