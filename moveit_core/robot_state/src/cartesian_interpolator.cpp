@@ -252,21 +252,31 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
     }
   }
 
-  percentage_solved *= checkJointSpaceJump(group, traj, jump_threshold);
+  percentage_solved *= checkJointSpaceJump(group, traj, jump_threshold, waypoints.size() > 1 ? 20 : 0);
 
   return CartesianInterpolator::Percentage(percentage_solved);
 }
 
 CartesianInterpolator::Percentage CartesianInterpolator::checkJointSpaceJump(const JointModelGroup* group,
                                                                              std::vector<RobotStatePtr>& traj,
-                                                                             const JumpThreshold& jump_threshold)
+                                                                             const JumpThreshold& jump_threshold,
+                                                                             size_t floating_window)
 {
   double percentage_solved = 1.0;
   if (traj.size() <= 1)
     return percentage_solved;
 
   if (jump_threshold.factor > 0.0)
-    percentage_solved *= checkRelativeJointSpaceJump(group, traj, jump_threshold.factor);
+  {
+    if (!floating_window)
+    {
+      percentage_solved *= checkRelativeJointSpaceJump(group, traj, jump_threshold.factor);
+    }
+    else
+    {
+      percentage_solved *= checkFloatingRelativeJointSpaceJump(group, traj, jump_threshold.factor, floating_window);
+    }
+  }
 
   if (jump_threshold.revolute > 0.0 || jump_threshold.prismatic > 0.0)
     percentage_solved *= checkAbsoluteJointSpaceJump(group, traj, jump_threshold.revolute, jump_threshold.prismatic);
@@ -301,6 +311,60 @@ CartesianInterpolator::Percentage CartesianInterpolator::checkRelativeJointSpace
   double thres = jump_threshold_factor * (total_dist / static_cast<double>(dist_vector.size()));
   for (std::size_t i = 0; i < dist_vector.size(); ++i)
   {
+    if (dist_vector[i] > thres)
+    {
+      RCLCPP_DEBUG(LOGGER, "Truncating Cartesian path due to detected jump in joint-space distance");
+      percentage = static_cast<double>(i + 1) / static_cast<double>(traj.size());
+      traj.resize(i + 1);
+      break;
+    }
+  }
+
+  return CartesianInterpolator::Percentage(percentage);
+}
+
+CartesianInterpolator::Percentage CartesianInterpolator::checkFloatingRelativeJointSpaceJump(const JointModelGroup* group,
+                                                                                             std::vector<std::shared_ptr<RobotState>>& traj,
+                                                                                             double jump_threshold_factor,
+                                                                                             size_t floating_window)
+{
+  if (traj.size() <= floating_window)
+  {
+    return checkRelativeJointSpaceJump(group, traj, jump_threshold_factor);
+  }
+
+  std::vector<double> dist_vector;
+  dist_vector.reserve(traj.size() - 1);
+  for (std::size_t i = 1; i < traj.size(); ++i)
+  {
+    dist_vector.push_back(traj[i]->distance(*traj[i - 1], group));
+  }
+
+  double percentage = 1.0;
+  int window_half = floating_window / 2;
+  for (std::size_t i = 0; i < dist_vector.size(); ++i)
+  {
+    double total_dist = 0.0;
+    int window_begin = int(i) - window_half;
+    int window_end = int(i) + window_half;
+
+    if (window_begin < 0)
+    {
+      window_end -= window_begin;
+      window_begin = 0;
+    }
+    else if (window_end > int(dist_vector.size()))
+    {
+      window_begin -= window_end - dist_vector.size();
+      window_end = dist_vector.size();
+    }
+
+    for (int j = window_begin; j < window_end; j++)
+    {
+      total_dist += dist_vector[j];
+    }
+
+    double thres = jump_threshold_factor * (total_dist / static_cast<double>(window_half * 2));
     if (dist_vector[i] > thres)
     {
       RCLCPP_DEBUG(LOGGER, "Truncating Cartesian path due to detected jump in joint-space distance");

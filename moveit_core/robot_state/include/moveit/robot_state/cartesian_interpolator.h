@@ -238,12 +238,13 @@ public:
      @param group The joint model group of the robot state.
      @param traj The trajectory that should be tested.
      @param jump_threshold The struct holding jump thresholds to determine if a joint space jump has occurred.
+     @param floating_window Floating window size for relative joint space jump check, 0 if disabled
      @return The fraction of the trajectory that passed.
 
      TODO: move to more appropriate location
   */
   static Percentage checkJointSpaceJump(const JointModelGroup* group, std::vector<std::shared_ptr<RobotState>>& traj,
-                                        const JumpThreshold& jump_threshold);
+                                        const JumpThreshold& jump_threshold, size_t floating_window = 0);
 
   /** \brief Tests for relative joint space jumps of the trajectory \e traj.
 
@@ -260,6 +261,22 @@ public:
   static Percentage checkRelativeJointSpaceJump(const JointModelGroup* group,
                                                 std::vector<std::shared_ptr<RobotState>>& traj,
                                                 double jump_threshold_factor);
+
+  /** \brief Tests for relative joint space jumps of the trajectory \e traj.
+
+     First, the average distance between adjacent trajectory points is computed. If two adjacent trajectory points
+     have distance > \e jump_threshold_factor * average, the trajectory is truncated at this point.
+
+     @param group The joint model group of the robot state.
+     @param traj The trajectory that should be tested.
+     @param jump_threshold_factor The threshold to determine if a joint space jump has occurred .
+     @return The fraction of the trajectory that passed.
+
+     TODO: move to more appropriate location
+   */
+  static Percentage checkFloatingRelativeJointSpaceJump(const JointModelGroup* group,
+                                                std::vector<std::shared_ptr<RobotState>>& traj,
+                                                double jump_threshold_factor, size_t floating_window);
 
   /** \brief Tests for absolute joint space jumps of the trajectory \e traj.
 
