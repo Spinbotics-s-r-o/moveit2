@@ -111,7 +111,6 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
   double translation_distance = (rotated_target.translation() - start_pose.translation()).norm();
 
   std::unique_ptr<moveit::core::RobotState> start_state_copy(new moveit::core::RobotState(*start_state));
-  double opposite_dir_multiplier = rotation_distance > 1e-8 ? (2*M_PI - rotation_distance)/rotation_distance : 0.0;
 
   // decide how many steps we will need for this trajectory
   std::size_t translation_steps = 0;
@@ -180,10 +179,20 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
   last_valid_percentage *= checkJointSpaceJump(group, traj, jump_threshold);
 
   // If planning failed due to joint space jump (probably hit joint limit) try to replan in opposite direction
+  double opposite_dir_multiplier = rotation_distance > 1e-8 ? std::fabs(rotation_distance - 2*M_PI) : 0.0;
   if(jump_threshold.factor > 0.0 && last_valid_percentage < 1.0 && opposite_dir_multiplier > 0.0) 
   {
     last_valid_percentage = 0.0;
-    steps = steps*opposite_dir_multiplier;
+
+    // again, decide how many rotation steps we will need for this trajectory
+    rotation_steps = 0;
+    if (max_step.rotation > 0.0)
+      rotation_steps = floor(opposite_dir_multiplier / max_step.rotation);
+
+    // If we are testing for relative jumps, we always want at least MIN_STEPS_FOR_JUMP_THRESH steps
+    steps = std::max(translation_steps, rotation_steps) + 1;
+    if (jump_threshold.factor > 0 && steps < MIN_STEPS_FOR_JUMP_THRESH)
+      steps = MIN_STEPS_FOR_JUMP_THRESH;
 
     start_state = start_state_copy.get();
     traj.clear();
@@ -193,7 +202,7 @@ CartesianInterpolator::Percentage CartesianInterpolator::computeCartesianPath(
     {
       double percentage = static_cast<double>(i) / static_cast<double>(steps);
 
-      Eigen::Isometry3d pose(start_quaternion.slerp(-percentage*opposite_dir_multiplier, target_quaternion));
+      Eigen::Isometry3d pose(start_quaternion.slerp(-percentage, target_quaternion));
       pose.translation() = percentage * rotated_target.translation() + (1 - percentage) * start_pose.translation();
 
       // Explicitly use a single IK attempt only: We want a smooth trajectory.
