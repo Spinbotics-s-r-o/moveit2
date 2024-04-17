@@ -80,14 +80,16 @@ ServoNode::ServoNode(const rclcpp::NodeOptions& options)
   // geometry/transforms/scene updates are not triggered even if scene exists :/ We only check for state updates
   // bool has_geometry = false;
   // bool has_transforms = false;
-  bool has_state = false;
-  planning_scene_monitor_->addUpdateCallback([/*&has_geometry, &has_transforms, */&has_state](auto type) {
+  has_state_ = false;
+  planning_scene_monitor_->addUpdateCallback([/*&has_geometry, &has_transforms, */this](auto type) {
     // if (type & planning_scene_monitor::PlanningSceneMonitor::UPDATE_GEOMETRY)
     //   has_geometry = true;
     // if (type & planning_scene_monitor::PlanningSceneMonitor::UPDATE_TRANSFORMS)
     //   has_transforms = true;
     if (type & planning_scene_monitor::PlanningSceneMonitor::UPDATE_STATE)
-      has_state = true;
+    {
+      has_state_ = true;
+    }
   });
 
   planning_scene_monitor_->startStateMonitor(servo_parameters.joint_topic);
@@ -110,8 +112,8 @@ ServoNode::ServoNode(const rclcpp::NodeOptions& options)
   }
 
   // Wait for the full robot state to be available
-  while (rclcpp::ok() && (/*!has_geometry || !has_transforms || */!has_state)) {
-    RCLCPP_INFO(LOGGER, "Waiting for complete state %d", /*(int)has_geometry, (int)has_transforms,*/ (int)has_state);
+  while (rclcpp::ok() && (/*!has_geometry || !has_transforms || */!has_state_)) {
+    RCLCPP_INFO(LOGGER, "Waiting for complete state %d", /*(int)has_geometry, (int)has_transforms,*/ (int)has_state_);
     rclcpp::sleep_for(std::chrono::milliseconds(10));
   }
   {
