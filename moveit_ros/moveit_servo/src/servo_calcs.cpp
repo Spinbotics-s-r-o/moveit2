@@ -301,7 +301,7 @@ void ServoCalcs::stop()
   {
     // scope so the mutex is unlocked after so the thread can continue
     // and therefore be joinable
-    const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+    const std::lock_guard<std::mutex> lock(input_mutex_);
     new_input_cmd_ = false;
     input_cv_.notify_all();
   }
@@ -426,7 +426,8 @@ void ServoCalcs::mainCalcLoop()
     // low latency mode -- begin calculations as soon as a new command is received.
     if (servo_params_.low_latency_mode)
     {
-      input_cv_.wait(main_loop_lock, [this] { return (new_input_cmd_ || stop_requested_); });
+      std::unique_lock<std::mutex> input_lock(input_mutex_);
+      input_cv_.wait(input_lock, [this] { return (new_input_cmd_ || stop_requested_); });
     }
 
     // reset new_input_cmd_ flag
@@ -503,16 +504,19 @@ void ServoCalcs::calculateSingleIteration()
   // All computations related to computing state q(t + dt) acts only on next_joint_state_ variable.
   next_joint_state_ = current_joint_state_;
 
-  if (latest_twist_stamped_)
-    twist_stamped_cmd_ = *latest_twist_stamped_;
-  if (latest_joint_cmd_)
-    joint_servo_cmd_ = *latest_joint_cmd_;
+  {
+    std::unique_lock<std::mutex> input_lock(input_mutex_);
+    if (latest_twist_stamped_)
+      twist_stamped_cmd_ = *latest_twist_stamped_;
+    if (latest_joint_cmd_)
+      joint_servo_cmd_ = *latest_joint_cmd_;
 
-  // Check for stale cmds
-  twist_command_is_stale_ = ((node_->now() - latest_twist_command_stamp_) >=
-                             rclcpp::Duration::from_seconds(servo_params_.incoming_command_timeout));
-  joint_command_is_stale_ = ((node_->now() - latest_joint_command_stamp_) >=
-                             rclcpp::Duration::from_seconds(servo_params_.incoming_command_timeout));
+    // Check for stale cmds
+    twist_command_is_stale_ = ((node_->now() - latest_twist_command_stamp_) >=
+                               rclcpp::Duration::from_seconds(servo_params_.incoming_command_timeout));
+    joint_command_is_stale_ = ((node_->now() - latest_joint_command_stamp_) >=
+                               rclcpp::Duration::from_seconds(servo_params_.incoming_command_timeout));
+  }
 
   // Get the transform from MoveIt planning frame to servoing command frame
   // Calculate this transform to ensure it is available via C++ API
@@ -1622,7 +1626,7 @@ void ServoCalcs::eeFrameIdCB(const std_msgs::msg::String::ConstSharedPtr& msg)
 
 void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(input_mutex_);
   // if (!latest_twist_stamped_ || msg->twist != latest_twist_stamped_->twist)
   //   RCLCPP_INFO_STREAM(LOGGER, "received twist\n" << geometry_msgs::msg::to_yaml(*msg));
   latest_twist_stamped_ = msg;
@@ -1637,7 +1641,7 @@ void ServoCalcs::twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSha
 
 void ServoCalcs::jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& msg)
 {
-  const std::lock_guard<std::mutex> lock(main_loop_mutex_);
+  const std::lock_guard<std::mutex> lock(input_mutex_);
   // if (!latest_joint_cmd_ || msg->velocities != latest_joint_cmd_->velocities)
   //   RCLCPP_INFO_STREAM(LOGGER, "received joint jog\n" << control_msgs::msg::to_yaml(*msg));
   latest_joint_cmd_ = msg;

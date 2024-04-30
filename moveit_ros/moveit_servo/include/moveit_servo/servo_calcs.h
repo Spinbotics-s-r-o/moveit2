@@ -321,6 +321,7 @@ protected:
 
   // main_loop_mutex_ is used to protect the input state and dynamic parameters
   mutable std::mutex main_loop_mutex_;
+  mutable std::mutex input_mutex_;
   Eigen::Isometry3d tf_moveit_to_robot_cmd_frame_;
   Eigen::Isometry3d tf_moveit_to_ee_frame_;
   geometry_msgs::msg::TwistStamped::ConstSharedPtr latest_twist_stamped_;
