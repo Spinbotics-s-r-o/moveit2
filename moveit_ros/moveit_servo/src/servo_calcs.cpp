@@ -111,12 +111,22 @@ ServoCalcs::ServoCalcs(const rclcpp::Node::SharedPtr& node,
       servo_params_.joint_command_in_topic, rclcpp::QoS(1).best_effort(),
       [this](const control_msgs::msg::JointJog::ConstSharedPtr& msg) { return jointCmdCB(msg); });
 
+  desired_pose_sub_ = node_->create_subscription<geometry_msgs::msg::PoseStamped>(
+      "~/desired_pose", rclcpp::QoS(1),
+      [this](const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg) { return desiredPoseCB(msg); });
+
   // ROS Server for allowing drift in some dimensions
   drift_dimensions_server_ = node_->create_service<spinbot_msgs::srv::ChangeDriftDimensions>(
       "~/change_drift_dimensions",
       [this](const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Request>& req,
              const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Response>& res) {
         return changeDriftDimensions(req, res);
+      });
+  get_desired_pose_server_ = node_->create_service<spinbot_msgs::srv::GetPoseStamped>(
+      "~/get_desired_pose",
+      [this](const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Request>& req,
+             const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Response>& res) {
+        return getDesiredPoseCallback(req, res);
       });
 
   // // Subscribe to the collision_check topic
@@ -250,8 +260,11 @@ void ServoCalcs::start()
   current_state_->copyJointGroupVelocities(joint_model_group_, current_joint_state_.velocity);
   // set previous state to same as current state for t = 0
   previous_joint_state_ = current_joint_state_;
-  desired_ee_pose_ = current_state_->getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse() *
-                     current_state_->getGlobalLinkTransform(ee_frame_id_);
+  {
+    const std::lock_guard<std::mutex> lock(input_mutex_);
+    desired_ee_pose_ = current_state_->getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
+                       current_state_->getGlobalLinkTransform(ee_frame_id_);
+  }
 
   // Check that all links are known to the robot
   auto check_link_is_known = [this](const std::string& frame_name) {
@@ -703,11 +716,17 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
                             [this](const double &vel) { return vel > servo_params_.max_joint_velocity_to_consider_halted; }) == 0;
   Eigen::VectorXd new_desired_ee_dir = update_desired_ee_dir ? (Eigen::Vector<double, 6>)delta_x.normalized() : desired_ee_dir_;
   // we skip update if not necessary to avoid accumulating numerical errors
-  if ((!servo_params_.allow_deviation && new_desired_ee_dir != desired_ee_dir_) || !std::isfinite(desired_ee_dir_[0]))
-    desired_ee_pose_ =
-        std::isfinite(desired_ee_dir_[0])
-          ? closestPoseOnLine(desired_ee_pose_, desired_ee_dir_, base_to_tip_frame_transform)
-          : base_to_tip_frame_transform;
+  Eigen::Isometry3d desired_ee_pose;
+  {
+    const std::lock_guard<std::mutex> lock(input_mutex_);
+    if ((!servo_params_.allow_deviation && new_desired_ee_dir != desired_ee_dir_) || !std::isfinite(desired_ee_dir_[0])) {
+      desired_ee_pose_ =
+          std::isfinite(desired_ee_dir_[0])
+            ? closestPoseOnLine(desired_ee_pose_, desired_ee_dir_, base_to_tip_frame_transform)
+            : base_to_tip_frame_transform;
+    }
+    desired_ee_pose = desired_ee_pose_;
+  }
   // allow_deviation == true case is handled in the bottom of internalServoUpdate method
   desired_ee_dir_ = new_desired_ee_dir;
   desired_delta_x_ = delta_x;
@@ -722,7 +741,7 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
   //            << "\nnext_pose_pure\n" << poseFromCartesianDelta(delta_x, base_to_tip_frame_transform, lookahead_interval).matrix();
   // ////////////////////////////
 
-  auto desired_base_to_tip_frame_transform = closestPoseOnLine(desired_ee_pose_, desired_ee_dir_, base_to_tip_frame_transform);
+  auto desired_base_to_tip_frame_transform = closestPoseOnLine(desired_ee_pose, desired_ee_dir_, base_to_tip_frame_transform);
   auto next_pose_eigen = poseFromCartesianDelta(delta_x, desired_base_to_tip_frame_transform, lookahead_interval);
   delta_x = cartesianDeltaFromPoses(base_to_tip_frame_transform, next_pose_eigen, lookahead_interval);
   // // for debug logging only //
@@ -1262,8 +1281,10 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   next_state.setJointGroupPositions(joint_model_group_, next_joint_state_.position);
   auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
                         next_state.getGlobalLinkTransform(ee_frame_id_);
-  if (servo_params_.allow_deviation)
+  if (servo_params_.allow_deviation) {
+    const std::lock_guard<std::mutex> lock(input_mutex_);
     desired_ee_pose_ = next_tip_frame;
+  }
   // !allow_deviation case is handled at top of cartesianServoCalcs
 
   // if (delta_theta[1] != 0.0)
@@ -1671,6 +1692,29 @@ void ServoCalcs::changeDriftDimensions(const std::shared_ptr<spinbot_msgs::srv::
   drift_dimensions_[5] = req->drift_z_rotation;
 
   res->success = true;
+}
+
+void ServoCalcs::desiredPoseCB(const geometry_msgs::msg::PoseStamped::ConstSharedPtr &msg) {
+  const std::lock_guard<std::mutex> lock(input_mutex_);
+  // RCLCPP_INFO_STREAM(LOGGER, "Received external desired pose. Previous:\n" << desired_ee_pose_.matrix());
+  tf2::fromMsg(msg->pose, desired_ee_pose_);
+  if (msg->header.frame_id != ik_solver_->getBaseFrame()) {
+    desired_ee_pose_ = current_state_->getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
+                       current_state_->getGlobalLinkTransform(msg->header.frame_id)*
+                       desired_ee_pose_;
+  }
+  // RCLCPP_INFO_STREAM(LOGGER, "New:\n" << desired_ee_pose_.matrix());
+}
+
+void ServoCalcs::getDesiredPoseCallback(const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Request>& /*req*/,
+                                        const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Response>& res)
+{
+  const std::lock_guard<std::mutex> lock(input_mutex_);
+  res->pose.pose = tf2::toMsg(desired_ee_pose_);
+  res->pose.header.stamp = node_->now();
+  res->pose.header.frame_id = ik_solver_->getBaseFrame();
+  res->child_frame_id = ee_frame_id_;
+  // RCLCPP_INFO_STREAM(LOGGER, "Sending desired pose:\n" << desired_ee_pose_.matrix());
 }
 
 }  // namespace moveit_servo

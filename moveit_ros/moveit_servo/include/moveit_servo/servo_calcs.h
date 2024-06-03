@@ -68,6 +68,8 @@
 #include <moveit_servo/collision_check.h>
 #include <moveit_servo_lib_parameters.hpp>
 
+#include "spinbot_msgs/srv/get_pose_stamped.hpp"
+
 namespace moveit_servo
 {
 enum class ServoType
@@ -225,6 +227,7 @@ protected:
   void twistStampedCB(const geometry_msgs::msg::TwistStamped::ConstSharedPtr& msg);
   void jointCmdCB(const control_msgs::msg::JointJog::ConstSharedPtr& msg);
   void collisionVelocityScaleCB(const std_msgs::msg::Float64::ConstSharedPtr& msg);
+  void desiredPoseCB(const geometry_msgs::msg::PoseStamped::ConstSharedPtr& msg);
 
   /**
    * Allow drift in certain dimensions. For example, may allow the wrist to rotate freely.
@@ -236,6 +239,9 @@ protected:
    */
   void changeDriftDimensions(const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Request>& req,
                              const std::shared_ptr<spinbot_msgs::srv::ChangeDriftDimensions::Response>& res);
+
+  void getDesiredPoseCallback(const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Request>& req,
+                              const std::shared_ptr<spinbot_msgs::srv::GetPoseStamped::Response>& res);
 
   double solutionScore(
     const Eigen::VectorXd &delta_theta, const Eigen::VectorXd &desired_delta_x, double delta_x_norm_weighted,
@@ -291,10 +297,12 @@ protected:
   rclcpp::Subscription<control_msgs::msg::JointJog>::SharedPtr joint_cmd_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr collision_velocity_scale_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr ee_frame_id_sub_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr desired_pose_sub_;
   rclcpp::Publisher<std_msgs::msg::Int8>::SharedPtr status_pub_;
   rclcpp::Publisher<trajectory_msgs::msg::JointTrajectory>::SharedPtr trajectory_outgoing_cmd_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr multiarray_outgoing_cmd_pub_;
   rclcpp::Service<spinbot_msgs::srv::ChangeDriftDimensions>::SharedPtr drift_dimensions_server_;
+  rclcpp::Service<spinbot_msgs::srv::GetPoseStamped>::SharedPtr get_desired_pose_server_;
 
   // Main tracking / result publisher loop
   std::thread thread_;
