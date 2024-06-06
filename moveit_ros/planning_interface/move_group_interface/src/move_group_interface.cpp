@@ -998,7 +998,7 @@ public:
   double computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double step,
                               double jump_threshold, moveit_msgs::msg::RobotTrajectory& msg,
                               const moveit_msgs::msg::Constraints& path_constraints, bool avoid_collisions,
-                              moveit_msgs::msg::MoveItErrorCodes& error_code, [[maybe_unused]] double velocity_scaling_factor, [[maybe_unused]] double acceleration_scaling_factor)
+                              moveit_msgs::msg::MoveItErrorCodes& error_code)
   {
     auto req = std::make_shared<spinbot_msgs::srv::GetCartesianPath::Request>();
     spinbot_msgs::srv::GetCartesianPath::Response::SharedPtr response;
@@ -1696,23 +1696,21 @@ void MoveGroupInterface::clearPlanningSceneDiff()
 
 double MoveGroupInterface::computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double eef_step,
                                                 double jump_threshold, moveit_msgs::msg::RobotTrajectory& trajectory,
-                                                bool avoid_collisions, moveit_msgs::msg::MoveItErrorCodes* error_code,
-                                                double velocity_scaling_factor, double acceleration_scaling_factor)
+                                                bool avoid_collisions, moveit_msgs::msg::MoveItErrorCodes* error_code)
 {
-  return computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, moveit_msgs::msg::Constraints(),
-                              avoid_collisions, error_code, velocity_scaling_factor, acceleration_scaling_factor);
+  return computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, moveit_msgs::msg::Constraints(), 
+                              avoid_collisions, error_code);
 }
 
 double MoveGroupInterface::computeCartesianPath(const std::vector<geometry_msgs::msg::Pose>& waypoints, double eef_step,
                                                 double jump_threshold, moveit_msgs::msg::RobotTrajectory& trajectory,
                                                 const moveit_msgs::msg::Constraints& path_constraints,
-                                                bool avoid_collisions, moveit_msgs::msg::MoveItErrorCodes* error_code,
-                                                double velocity_scaling_factor, double acceleration_scaling_factor)
+                                                bool avoid_collisions, moveit_msgs::msg::MoveItErrorCodes* error_code)
 {
   if (error_code)
   {
     return impl_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, path_constraints,
-                                       avoid_collisions, *error_code, velocity_scaling_factor, acceleration_scaling_factor);
+                                       avoid_collisions, *error_code);
   }
   else
   {
@@ -1720,7 +1718,7 @@ double MoveGroupInterface::computeCartesianPath(const std::vector<geometry_msgs:
     err_tmp.val = moveit_msgs::msg::MoveItErrorCodes::SUCCESS;
     moveit_msgs::msg::MoveItErrorCodes& err = error_code ? *error_code : err_tmp;
     return impl_->computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, path_constraints,
-                                       avoid_collisions, err, velocity_scaling_factor, acceleration_scaling_factor);
+                                       avoid_collisions, err);
   }
 }
 
