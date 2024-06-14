@@ -646,7 +646,8 @@ bool OrientationConstraint::configure(const moveit_msgs::msg::OrientationConstra
   parameterization_type_ = oc.parameterization;
   // validate the parameterization, set to default value if invalid
   if (parameterization_type_ != moveit_msgs::msg::OrientationConstraint::XYZ_EULER_ANGLES &&
-      parameterization_type_ != moveit_msgs::msg::OrientationConstraint::ROTATION_VECTOR)
+      parameterization_type_ != moveit_msgs::msg::OrientationConstraint::ROTATION_VECTOR && 
+      parameterization_type_ != moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
   {
     RCLCPP_WARN(LOGGER,
                 "Unknown parameterization for orientation constraint tolerance, using default (XYZ_EULER_ANGLES).");
@@ -705,17 +706,20 @@ ConstraintEvaluationResult OrientationConstraint::decide(const moveit::core::Rob
     return ConstraintEvaluationResult(true, 0.0);
 
   Eigen::Isometry3d diff;
+  Eigen::Vector3d gravity_vector_in_desired_frame;
   if (mobile_frame_)
   {
     // getFrameTransform() returns a valid isometry by contract
     Eigen::Matrix3d tmp = state.getFrameTransform(desired_rotation_frame_id_).linear() * desired_rotation_matrix_;
     // getGlobalLinkTransform() returns a valid isometry by contract
     diff = Eigen::Isometry3d(tmp.transpose() * state.getGlobalLinkTransform(link_model_).linear());  // valid isometry
+    gravity_vector_in_desired_frame = tmp.transpose() * -Eigen::Vector3d::UnitZ();
   }
   else
   {
     // diff is valid isometry by construction
     diff = Eigen::Isometry3d(desired_rotation_matrix_inv_ * state.getGlobalLinkTransform(link_model_).linear());
+    gravity_vector_in_desired_frame = desired_rotation_matrix_inv_ * -Eigen::Vector3d::UnitZ();
   }
 
   // This needs to live outside the if-block scope (as xyz_rotation points to its data).
@@ -749,6 +753,13 @@ ConstraintEvaluationResult OrientationConstraint::decide(const moveit::core::Rob
     xyz_rotation(0) = fabs(xyz_rotation(0));
     xyz_rotation(1) = fabs(xyz_rotation(1));
     xyz_rotation(2) = fabs(xyz_rotation(2));
+  }
+  else if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)  // Difference from gravity vector
+  {
+    Eigen::Vector3d gravity_vector_in_desired_frame_rotated = diff * gravity_vector_in_desired_frame;
+    double angle_diff = acos(std::max(-1.0, std::min(1.0, gravity_vector_in_desired_frame_rotated.dot(gravity_vector_in_desired_frame))));
+    xyz_rotation = Eigen::Vector3d::Zero();
+    xyz_rotation(2) = angle_diff;                            
   }
   else
   {
@@ -781,17 +792,20 @@ ConstraintEvaluationResult OrientationConstraint::decide(const moveit::core::Rob
     return ConstraintEvaluationResult(true, 0.0);
 
   Eigen::Isometry3d diff;
+  Eigen::Vector3d gravity_vector_in_desired_frame;
   if (mobile_frame_)
   {
     // getFrameTransform() returns a valid isometry by contract
     Eigen::Matrix3d tmp = state.getFrameTransform(desired_rotation_frame_id_).linear() * desired_rotation_matrix_;
     // getGlobalLinkTransform() returns a valid isometry by contract
     diff = Eigen::Isometry3d(tmp.transpose() * orientation);  // valid isometry
+    gravity_vector_in_desired_frame = tmp.transpose() * -Eigen::Vector3d::UnitZ();
   }
   else
   {
     // diff is valid isometry by construction
     diff = Eigen::Isometry3d(desired_rotation_matrix_inv_ * orientation);
+    gravity_vector_in_desired_frame = desired_rotation_matrix_inv_ * -Eigen::Vector3d::UnitZ();
   }
 
   // This needs to live outside the if-block scope (as xyz_rotation points to its data).
@@ -825,6 +839,12 @@ ConstraintEvaluationResult OrientationConstraint::decide(const moveit::core::Rob
     xyz_rotation(0) = fabs(xyz_rotation(0));
     xyz_rotation(1) = fabs(xyz_rotation(1));
     xyz_rotation(2) = fabs(xyz_rotation(2));
+  }
+  else if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)  // Difference from gravity vector
+  {
+    Eigen::Vector3d gravity_vector_in_desired_frame_rotated = diff * gravity_vector_in_desired_frame;
+    double angle_diff = acos(std::max(-1.0, std::min(1.0, gravity_vector_in_desired_frame_rotated.dot(gravity_vector_in_desired_frame))));
+    xyz_rotation(2) = angle_diff;                           
   }
   else
   {

@@ -413,6 +413,10 @@ public:
    * performance?
    * */
   Eigen::MatrixXd calcErrorJacobian(const Eigen::Ref<const Eigen::VectorXd>& x) const override;
+
+private:
+
+  int parameterization_type_;
 };
 
 /** \brief Extract position constraints from the MoveIt message.

@@ -307,20 +307,53 @@ void OrientationConstraint::parseConstraintMsg(const moveit_msgs::msg::Constrain
   tf2::fromMsg(constraints.orientation_constraints.at(0).orientation, target_orientation_);
 
   link_name_ = constraints.orientation_constraints.at(0).link_name;
+
+  parameterization_type_ = constraints.orientation_constraints.at(0).parameterization;
 }
 
 Eigen::VectorXd OrientationConstraint::calcError(const Eigen::Ref<const Eigen::VectorXd>& x) const
 {
   Eigen::Matrix3d orientation_difference = forwardKinematics(x).linear().transpose() * target_orientation_;
-  Eigen::AngleAxisd aa(orientation_difference);
-  return aa.axis() * aa.angle();
+
+  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
+  {
+    Eigen::Vector3d gravity_vector_in_desired_frame = target_orientation_.inverse() * -Eigen::Vector3d::UnitZ();
+    Eigen::Vector3d gravity_vector_in_desired_frame_rotated = orientation_difference.transpose() * gravity_vector_in_desired_frame;
+    double angle_diff = acos(std::max(-1.0, std::min(1.0, gravity_vector_in_desired_frame_rotated.dot(gravity_vector_in_desired_frame))));
+    Eigen::VectorXd error = Eigen::VectorXd::Zero(3);
+    error[2] = 2 * angle_diff; // Not sure if it should be 2x, but for some reason error Bounds are also 2x
+    return error;
+  } 
+  else 
+  {
+    Eigen::AngleAxisd aa(orientation_difference);
+    return aa.axis() * aa.angle();
+  }
 }
 
 Eigen::MatrixXd OrientationConstraint::calcErrorJacobian(const Eigen::Ref<const Eigen::VectorXd>& x) const
 {
-  Eigen::Matrix3d orientation_difference = forwardKinematics(x).linear().transpose() * target_orientation_;
-  Eigen::AngleAxisd aa{ orientation_difference };
-  return -angularVelocityToAngleAxis(aa.angle(), aa.axis()) * robotGeometricJacobian(x).bottomRows(3);
+  Eigen::Matrix3d current_orientation = forwardKinematics(x).linear();
+  Eigen::Matrix3d orientation_difference = current_orientation.transpose() * target_orientation_;
+  
+  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
+  {
+    Eigen::Vector3d gravity_vector_in_desired_frame = target_orientation_.inverse() * -Eigen::Vector3d::UnitZ();
+    Eigen::Vector3d gravity_vectord_in_global_frame_rotate = current_orientation * gravity_vector_in_desired_frame;
+
+    Eigen::Matrix3d gjac = Eigen::Matrix3d::Zero();
+    const auto &g = gravity_vectord_in_global_frame_rotate;
+    double gxy = std::max(0.0001, g.norm());
+    gjac(2, 0) = g[1]/gxy;
+    gjac(2, 1) = -g[0]/gxy;
+
+    return gjac * robotGeometricJacobian(x).bottomRows(3);
+  }
+  else
+  {
+    Eigen::AngleAxisd aa{ orientation_difference };
+    return -angularVelocityToAngleAxis(aa.angle(), aa.axis()) * robotGeometricJacobian(x).bottomRows(3);
+  }
 }
 
 /************************************
