@@ -309,17 +309,19 @@ void OrientationConstraint::parseConstraintMsg(const moveit_msgs::msg::Constrain
   link_name_ = constraints.orientation_constraints.at(0).link_name;
 
   parameterization_type_ = constraints.orientation_constraints.at(0).parameterization;
+
+  tf2::fromMsg(constraints.orientation_constraints.at(0).reference_vector, reference_vector_);
 }
 
 Eigen::VectorXd OrientationConstraint::calcError(const Eigen::Ref<const Eigen::VectorXd>& x) const
 {
   Eigen::Matrix3d orientation_difference = forwardKinematics(x).linear().transpose() * target_orientation_;
 
-  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
+  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::REFERENCE_VECTOR)
   {
-    Eigen::Vector3d gravity_vector_in_desired_frame = target_orientation_.inverse() * -Eigen::Vector3d::UnitZ();
-    Eigen::Vector3d gravity_vector_in_desired_frame_rotated = orientation_difference.transpose() * gravity_vector_in_desired_frame;
-    double angle_diff = acos(std::max(-1.0, std::min(1.0, gravity_vector_in_desired_frame_rotated.dot(gravity_vector_in_desired_frame))));
+    Eigen::Vector3d reference_vector_in_desired_frame = target_orientation_.inverse() * reference_vector_;
+    Eigen::Vector3d reference_vector_in_desired_frame_rotated = orientation_difference.transpose() * reference_vector_in_desired_frame;
+    double angle_diff = acos(std::max(-1.0, std::min(1.0, reference_vector_in_desired_frame_rotated.dot(reference_vector_in_desired_frame))));
     Eigen::VectorXd error = Eigen::VectorXd::Zero(3);
     error[2] = 2 * angle_diff; // Not sure if it should be 2x, but for some reason error Bounds are also 2x
     return error;
@@ -336,13 +338,13 @@ Eigen::MatrixXd OrientationConstraint::calcErrorJacobian(const Eigen::Ref<const 
   Eigen::Matrix3d current_orientation = forwardKinematics(x).linear();
   Eigen::Matrix3d orientation_difference = current_orientation.transpose() * target_orientation_;
   
-  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
+  if (parameterization_type_ == moveit_msgs::msg::OrientationConstraint::REFERENCE_VECTOR)
   {
-    Eigen::Vector3d gravity_vector_in_desired_frame = target_orientation_.inverse() * -Eigen::Vector3d::UnitZ();
-    Eigen::Vector3d gravity_vectord_in_global_frame_rotate = current_orientation * gravity_vector_in_desired_frame;
+    Eigen::Vector3d reference_vector_in_desired_frame = target_orientation_.inverse() * reference_vector_;
+    Eigen::Vector3d reference_vectord_in_global_frame_rotated = current_orientation * reference_vector_in_desired_frame;
 
     Eigen::Matrix3d gjac = Eigen::Matrix3d::Zero();
-    const auto &g = gravity_vectord_in_global_frame_rotate;
+    const auto &g = reference_vectord_in_global_frame_rotated;
     double gxy = std::max(0.0001, g.norm());
     gjac(2, 0) = g[1]/gxy;
     gjac(2, 1) = -g[0]/gxy;

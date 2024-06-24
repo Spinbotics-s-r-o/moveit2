@@ -511,7 +511,7 @@ bool IKConstraintSampler::samplePose(Eigen::Vector3d& pos, Eigen::Quaterniond& q
       diff = Eigen::Isometry3d(Eigen::AngleAxisd(rotation_vector.norm(), rotation_vector.normalized()));
     }
     else if (sampling_pose_.orientation_constraint_->getParameterizationType() ==
-             moveit_msgs::msg::OrientationConstraint::GRAVITATIONAL_VECTOR)
+             moveit_msgs::msg::OrientationConstraint::REFERENCE_VECTOR)
     {
       // This code is not properly tested, because it seems that it is only used when goal orientation violates constraints
       // Leaving it here just in case
@@ -520,15 +520,15 @@ bool IKConstraintSampler::samplePose(Eigen::Vector3d& pos, Eigen::Quaterniond& q
         return coeffs.unaryExpr([max_index](int i) { return i == max_index ? 1.0 : 0.0; });
       };
 
-      Eigen::Vector3d gravity_vector = sampling_pose_.orientation_constraint_->getDesiredRotationMatrix().transpose() * -Eigen::Vector3d::UnitZ();
-      Eigen::Vector3d most_distant_vector = align_to_most_distant_axis(gravity_vector);
-      Eigen::Vector3d gravity_prependicular_vector = most_distant_vector.cross(gravity_vector).normalized();
+      Eigen::Vector3d reference_vector_in_desired_frame = sampling_pose_.orientation_constraint_->getDesiredRotationMatrix().transpose() * sampling_pose_.orientation_constraint_->getReferenceVector();
+      Eigen::Vector3d most_distant_vector = align_to_most_distant_axis(reference_vector_in_desired_frame);
+      Eigen::Vector3d reference_prependicular_vector = most_distant_vector.cross(reference_vector_in_desired_frame).normalized();
 
       double rand1 = 2.0 * (random_number_generator_.uniform01() - 0.5) * M_PI;
       double rand2 = 2.0 * (random_number_generator_.uniform01() - 0.5) * M_PI;
-      diff = Eigen::Isometry3d( Eigen::AngleAxisd(rand1, gravity_vector)*
-                                Eigen::AngleAxisd(angle_z, gravity_prependicular_vector)*  // inclination
-                                Eigen::AngleAxisd(rand2, gravity_vector));
+      diff = Eigen::Isometry3d( Eigen::AngleAxisd(rand1, reference_vector_in_desired_frame)*
+                                Eigen::AngleAxisd(angle_z, reference_prependicular_vector)*  // inclination
+                                Eigen::AngleAxisd(rand2, reference_vector_in_desired_frame));
     }
     else
     {

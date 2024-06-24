@@ -414,9 +414,15 @@ public:
    * */
   Eigen::MatrixXd calcErrorJacobian(const Eigen::Ref<const Eigen::VectorXd>& x) const override;
 
+  const Eigen::Vector3d& getReferenceVector()
+  {
+    return reference_vector_;
+  }
+
 private:
 
   int parameterization_type_;
+  Eigen::Vector3d reference_vector_;
 };
 
 /** \brief Extract position constraints from the MoveIt message.

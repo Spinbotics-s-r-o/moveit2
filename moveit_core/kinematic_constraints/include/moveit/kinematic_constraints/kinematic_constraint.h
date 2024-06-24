@@ -484,6 +484,11 @@ public:
     return parameterization_type_;
   }
 
+  Eigen::Vector3d getReferenceVector() const
+  {
+    return reference_vector_;
+  }
+
 protected:
   const moveit::core::LinkModel* link_model_;   /**< \brief The target link model */
   Eigen::Matrix3d desired_rotation_matrix_;     /**< \brief The desired rotation matrix in the tf frame. Guaranteed to
@@ -495,6 +500,7 @@ protected:
   int parameterization_type_;                   /**< \brief Parameterization type for orientation tolerance. */
   double absolute_x_axis_tolerance_, absolute_y_axis_tolerance_,
       absolute_z_axis_tolerance_; /**< \brief Storage for the tolerances */
+  Eigen::Vector3d reference_vector_;
 };
 
 MOVEIT_CLASS_FORWARD(PositionConstraint);  // Defines PositionConstraintPtr, ConstPtr, WeakPtr... etc
