@@ -274,8 +274,9 @@ Eigen::Isometry3d closestPoseOnLine(const Eigen::Isometry3d& line_start, const E
                                     const Eigen::Isometry3d& pose)
 {
   Eigen::VectorXd diff_vector = cartesianDeltaFromPoses(line_start, pose, 1.0);
-  double projection = line_delta.dot(diff_vector);
-  return poseFromCartesianDelta(projection * line_delta, line_start, 1.0);
+  auto line_delta_normalized = line_delta.normalized();
+  double projection = line_delta_normalized.dot(diff_vector);
+  return poseFromCartesianDelta(projection * line_delta_normalized, line_start, 1.0);
 }
 
 double getVelocityScalingFactor(const moveit::core::JointModelGroup* joint_model_group, const Eigen::VectorXd& velocity)
