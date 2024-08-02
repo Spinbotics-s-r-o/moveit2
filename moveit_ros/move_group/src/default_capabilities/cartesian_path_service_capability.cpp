@@ -191,8 +191,11 @@ bool MoveGroupCartesianPathService::computeService(
           }
 
           // time trajectory
-          trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
-          time_param.computeTimeStamps(rt, req->max_velocity_scaling_factor, req->max_acceleration_scaling_factor);
+          if(req->use_time_optimization)
+          {
+            trajectory_processing::TimeOptimalTrajectoryGeneration time_param;
+            time_param.computeTimeStamps(rt, req->max_velocity_scaling_factor, req->max_acceleration_scaling_factor);
+          }
 
           rt.getRobotTrajectoryMsg(res->solution);
           RCLCPP_INFO(LOGGER, "Computed Cartesian path with %u points (followed %lf%% of requested trajectory)",
