@@ -342,7 +342,7 @@ std::list<std::pair<double, bool>> Path::getSwitchingPoints() const
 }
 
 Trajectory::Trajectory(const Path& path, const Eigen::VectorXd& max_velocity, const Eigen::VectorXd& max_acceleration,
-                       double time_step)
+                       double time_step, const Eigen::VectorXd& start_velocity)
   : path_(path)
   , max_velocity_(max_velocity)
   , max_acceleration_(max_acceleration)
@@ -351,8 +351,17 @@ Trajectory::Trajectory(const Path& path, const Eigen::VectorXd& max_velocity, co
   , time_step_(time_step)
   , cached_time_(std::numeric_limits<double>::max())
 {
-  trajectory_.push_back(TrajectoryStep(0.0, 0.0));
-  double after_acceleration = getMinMaxPathAcceleration(0.0, 0.0, true);
+  double start_vel = 0.0;
+  if (start_velocity.norm() > 0.0) {
+    auto tangent = path_.getTangent(0.0);
+    start_vel = tangent.dot(start_velocity);
+    double start_vel_saturated = std::max(0.0, std::min(getVelocityMaxPathVelocity(0.0), start_velocity.norm()));
+    if (std::abs(start_vel_saturated - start_vel) > 1e-6)
+      RCLCPP_WARN(LOGGER, "saturating start_vel from %lf to %lf due to velocity bounds", start_vel, start_vel_saturated);
+    start_vel = start_vel_saturated;
+  }
+  trajectory_.push_back(TrajectoryStep(0.0, start_vel));
+  double after_acceleration = getMinMaxPathAcceleration(0.0, start_vel, true);
   while (valid_ && !integrateForward(trajectory_, after_acceleration) && valid_)
   {
     double before_acceleration;
@@ -1143,6 +1152,11 @@ bool totgComputeTimeStamps(const size_t num_waypoints, robot_trajectory::RobotTr
   return true;
 }
 
+void TimeOptimalTrajectoryGeneration::setUseStartVelocity(bool use_start_velocity)
+{
+  use_start_velocity_ = use_start_velocity;
+}
+
 bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_trajectory::RobotTrajectory& trajectory,
                                                                          const Eigen::VectorXd& max_velocity,
                                                                          const Eigen::VectorXd& max_acceleration) const
@@ -1220,8 +1234,16 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
     return true;
   }
 
+  // Get the trajectory start velocity if needed
+  Eigen::VectorXd start_velocity = Eigen::VectorXd::Zero(num_joints);
+  if (use_start_velocity_)
+  {
+    moveit::core::RobotStatePtr start_waypoint = trajectory.getWayPointPtr(0);
+    for (size_t j = 0; j < num_joints; ++j)
+      start_velocity[j] = start_waypoint->getVariableVelocity(idx[j]);
+  }
   // Now actually call the algorithm
-  Trajectory parameterized(Path(points, path_tolerance_, min_durations), max_velocity, max_acceleration, DEFAULT_TIMESTEP);
+  Trajectory parameterized(Path(points, path_tolerance_, min_durations), max_velocity, max_acceleration, DEFAULT_TIMESTEP, start_velocity);
   if (!parameterized.isValid())
   {
     RCLCPP_ERROR(LOGGER, "Unable to parameterize trajectory.");

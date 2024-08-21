@@ -121,7 +121,7 @@ class Trajectory
 public:
   /// @brief Generates a time-optimal trajectory
   Trajectory(const Path& path, const Eigen::VectorXd& max_velocity, const Eigen::VectorXd& max_acceleration,
-             double time_step = 0.001);
+             double time_step = 0.001, const Eigen::VectorXd& start_velocity = Eigen::VectorXd());
 
   ~Trajectory();
 
@@ -253,6 +253,7 @@ public:
                          const double max_velocity_scaling_factor = 1.0,
                          const double max_acceleration_scaling_factor = 1.0) const override;
 
+  void setUseStartVelocity(bool use_start_velocity);
 private:
   bool doTimeParameterizationCalculations(robot_trajectory::RobotTrajectory& trajectory,
                                           const Eigen::VectorXd& max_velocity,
@@ -276,6 +277,7 @@ private:
   const double path_tolerance_;
   const double resample_dt_;
   const double min_angle_change_;
+  bool use_start_velocity_ = false;
 };
 
 // clang-format off
