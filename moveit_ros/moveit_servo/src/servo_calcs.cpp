@@ -353,11 +353,13 @@ void ServoCalcs::updateParams()
         params.robot_link_command_frame = servo_params_.robot_link_command_frame;
       }
     }
-    servo_params_ = params;
 
     if (params.movement_limits_file != servo_params_.movement_limits_file) {
+      servo_params_ = params;
       reloadMovementLimits();
     }
+    else
+      servo_params_ = params;
   }
 }
 
