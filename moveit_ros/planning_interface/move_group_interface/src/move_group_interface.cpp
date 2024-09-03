@@ -1700,7 +1700,7 @@ double MoveGroupInterface::computeCartesianPath(const std::vector<geometry_msgs:
                                                 bool avoid_collisions, moveit_msgs::msg::MoveItErrorCodes* error_code,
                                                 bool use_time_optimization)
 {
-  return computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, moveit_msgs::msg::Constraints(), 
+  return computeCartesianPath(waypoints, eef_step, jump_threshold, trajectory, getPathConstraints(), 
                               avoid_collisions, error_code, use_time_optimization);
 }
 
