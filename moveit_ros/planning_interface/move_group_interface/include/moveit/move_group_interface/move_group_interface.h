@@ -304,6 +304,8 @@ public:
    * sets that state */
   void setStartState(const moveit::core::RobotState& start_state);
 
+  moveit::core::RobotStatePtr getStartState();
+
   /** \brief Set the starting state for planning to be that reported by the robot's joint state publication */
   void setStartStateToCurrentState();
 

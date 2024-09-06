@@ -1751,6 +1751,11 @@ void MoveGroupInterface::setStartState(const moveit::core::RobotState& start_sta
   impl_->setStartState(start_state);
 }
 
+moveit::core::RobotStatePtr MoveGroupInterface::getStartState()
+{
+  return impl_->getStartState();
+}
+
 void MoveGroupInterface::setStartStateToCurrentState()
 {
   impl_->setStartStateToCurrentState();
