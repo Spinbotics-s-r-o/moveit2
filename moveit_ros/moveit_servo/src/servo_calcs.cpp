@@ -1153,7 +1153,7 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
 
   // apply tcp velocity limit
   Eigen::MatrixXd jacobian = current_state_->getJacobian(joint_model_group_);
-  double tcp_vel = (jacobian.block(0, 0, jacobian.rows(), 3)*delta_theta.block<3, 1>(0, 0).matrix()).norm()/servo_params_.publish_period;
+  double tcp_vel = (jacobian.block(0, 0, 3, jacobian.cols())*delta_theta.block<3, 1>(0, 0).matrix()).norm()/servo_params_.publish_period;
   if (tcp_vel > movement_limits_.max_ee_velocity) {
     RCLCPP_INFO_THROTTLE(LOGGER, *node_->get_clock(), 2000, "Limiting tcp vel (%lf > %lf)", tcp_vel, movement_limits_.max_ee_velocity);
     delta_theta *= movement_limits_.max_ee_velocity/tcp_vel;
