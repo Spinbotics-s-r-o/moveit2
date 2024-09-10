@@ -209,6 +209,7 @@ bool applyJointUpdate(const double publish_period, const Eigen::ArrayXd& delta_t
   std::transform(next_joint_state.position.begin(), next_joint_state.position.end(),
                  previous_joint_state.position.begin(), next_joint_state.velocity.begin(), compute_velocity);
 
+  next_joint_state.header.stamp = rclcpp::Time(previous_joint_state.header.stamp) + rclcpp::Duration::from_seconds(publish_period);
   return true;
 }
 
@@ -326,7 +327,7 @@ void enforceVelocityLimits(const moveit::core::JointModelGroup* joint_model_grou
 }
 
 std::vector<const moveit::core::JointModel*>
-enforcePositionLimits(sensor_msgs::msg::JointState& joint_state, const double joint_limit_margin,
+enforcePositionLimits(const sensor_msgs::msg::JointState& joint_state, const double joint_limit_margin,
                       const moveit::core::JointModelGroup* joint_model_group)
 {
   // Halt if we're past a joint margin and joint velocity is moving even farther past

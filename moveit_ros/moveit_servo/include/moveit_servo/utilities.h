@@ -146,7 +146,7 @@ void enforceVelocityLimits(const moveit::core::JointModelGroup* joint_model_grou
  * @return Vector of the joints that would move farther past position margin limits
  */
 std::vector<const moveit::core::JointModel*>
-enforcePositionLimits(sensor_msgs::msg::JointState& joint_state, const double joint_limit_margin,
+enforcePositionLimits(const sensor_msgs::msg::JointState& joint_state, const double joint_limit_margin,
                       const moveit::core::JointModelGroup* joint_model_group);
 
 /** \brief Calculate a velocity scaling factor, due to existence of movements in drifting dimensions

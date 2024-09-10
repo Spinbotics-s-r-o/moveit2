@@ -493,6 +493,15 @@ void ServoCalcs::calculateSingleIteration()
     planning_scene_monitor::LockedPlanningSceneRO scene(planning_scene_monitor_);
     real_state = std::make_shared<moveit::core::RobotState>(scene->getCurrentState());
   }
+  rclcpp::Time current_stamp = node_->now();
+  rclcpp::Time cjs_stamp = current_joint_state_.header.stamp;
+  if (cjs_stamp.nanoseconds() != 0) {
+    double stamp_diff = (current_stamp - cjs_stamp).seconds();
+    for (size_t i = 0; i < current_joint_state_.position.size(); i++)
+      current_joint_state_.position[i] += current_joint_state_.velocity[i]*stamp_diff;
+  }
+  current_joint_state_.header.stamp = current_stamp;
+
   real_joint_state_ = current_joint_state_;
   real_state->copyJointGroupPositions(joint_model_group_, real_joint_state_.position);
   real_state->copyJointGroupVelocities(joint_model_group_, real_joint_state_.velocity);
@@ -636,11 +645,10 @@ void ServoCalcs::calculateSingleIteration()
     
     *last_sent_command_ = *joint_trajectory;
     multiarray_outgoing_cmd_pub_->publish(std::move(joints));
-
-    auto debug_msg = std::make_unique<std_msgs::msg::Float64MultiArray>();
-    debug_msg->data = debug_data_;
-    debug_pub_->publish(std::move(debug_msg));
   }
+  auto debug_msg = std::make_unique<std_msgs::msg::Float64MultiArray>();
+  debug_msg->data = debug_data_;
+  debug_pub_->publish(std::move(debug_msg));
 
   // Update the filters if we haven't yet
   if (!updated_filters_)
@@ -984,25 +992,25 @@ bool ServoCalcs::cartesianServoCalcs(geometry_msgs::msg::TwistStamped cmd,
   //   RCLCPP_INFO_STREAM(LOGGER, "drift_factor: " << drift_factor << "\nsingularity_factor: " << singularity_factor << "\ndelta_x\n" << delta_x << "\ndelta_theta\n" << delta_theta_);
   bool success = internalServoUpdate(delta_theta_, joint_trajectory, ServoType::CARTESIAN_SPACE, attempts_remaining);
 
-  debug_data_.clear();
-  for (int i = 0; i < delta_theta_.rows(); i++)
-    debug_data_.push_back(delta_theta_[i]);
-  debug_data_.push_back(8);
-  for (int i = 0; i < delta_x_full.rows(); i++)
-    debug_data_.push_back(delta_x_full[i]);
-  debug_data_.push_back(8);
-  debug_data_.push_back(solution_name.length());
-  debug_data_.push_back(drift_factor);
-  if (!joint_trajectory.points.empty()) {
-    debug_data_.push_back(8);
-    for (auto v : joint_trajectory.points[0].velocities)
-      debug_data_.push_back(v);
-    debug_data_.push_back(8);
-    for (auto v : joint_trajectory.points[0].positions)
-      debug_data_.push_back(v);
-    debug_data_.push_back(8);
-  }
-  debug_data_.push_back(node_->now().seconds());
+  // debug_data_.clear();
+  // for (int i = 0; i < delta_theta_.rows(); i++)
+  //   debug_data_.push_back(delta_theta_[i]);
+  // debug_data_.push_back(8);
+  // for (int i = 0; i < delta_x_full.rows(); i++)
+  //   debug_data_.push_back(delta_x_full[i]);
+  // debug_data_.push_back(8);
+  // debug_data_.push_back(solution_name.length());
+  // debug_data_.push_back(drift_factor);
+  // if (!joint_trajectory.points.empty()) {
+  //   debug_data_.push_back(8);
+  //   for (auto v : joint_trajectory.points[0].velocities)
+  //     debug_data_.push_back(v);
+  //   debug_data_.push_back(8);
+  //   for (auto v : joint_trajectory.points[0].positions)
+  //     debug_data_.push_back(v);
+  //   debug_data_.push_back(8);
+  // }
+  // debug_data_.push_back(node_->now().seconds());
 
   return success;
 }
@@ -1251,9 +1259,24 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   enforceVelocityLimits(joint_model_group_, servo_params_.publish_period, next_joint_state_,
                         servo_params_.override_velocity_scaling_factor);
 
+  // realistic_next_joint_state is the next joint state after adding distance passed during the computation
+  auto pessimistic_next_joint_state = next_joint_state_;
+  auto now = node_->now();
+  rclcpp::Time cjs_stamp = current_joint_state_.header.stamp;
+  double computation_duration = cjs_stamp.nanoseconds() != 0 ? (now - cjs_stamp).seconds() : 0.0;
+  rclcpp::Time pjs_stamp = previous_joint_state_.header.stamp;
+  double estimated_next_command_delay = std::max(computation_duration,
+                                                 pjs_stamp.nanoseconds() != 0 ? (cjs_stamp - pjs_stamp).seconds() - servo_params_.publish_period : 0.0);
+  for (size_t i = 0; i < pessimistic_next_joint_state.position.size(); i++) {
+    if ((pessimistic_next_joint_state.velocity[i] > 0) == (real_joint_state_.position[i] > current_joint_state_.position[i]))
+      pessimistic_next_joint_state.position[i] += real_joint_state_.position[i] - current_joint_state_.position[i];  // use real joint state if it's more dangerous
+    pessimistic_next_joint_state.position[i] += current_joint_state_.velocity[i]*computation_duration;  // add distance passed during this computation
+    pessimistic_next_joint_state.position[i] += next_joint_state_.velocity[i]*estimated_next_command_delay;  // add estimated distance that will be passed before next command
+  }
+
   // Enforce SRDF position limits, might halt if needed, set prev_vel to 0
   const auto joints_to_halt =
-      enforcePositionLimits(next_joint_state_, servo_params_.joint_limit_margin, joint_model_group_);
+      enforcePositionLimits(pessimistic_next_joint_state, servo_params_.joint_limit_margin, joint_model_group_);
 
   if (!joints_to_halt.empty())
   {
@@ -1279,11 +1302,12 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   // compose outgoing message
   composeJointTrajMessage(next_joint_state_, joint_trajectory);
 
-  auto next_state = *current_state_;
-  next_state.setJointGroupPositions(joint_model_group_, next_joint_state_.position);
-  auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
-                        next_state.getGlobalLinkTransform(ee_frame_id_);
   if (servo_params_.allow_deviation) {
+    auto next_state = *current_state_;
+    next_state.setJointGroupPositions(joint_model_group_, next_joint_state_.position);
+    auto next_tip_frame = next_state.getGlobalLinkTransform(ik_solver_->getBaseFrame()).inverse()*
+                          next_state.getGlobalLinkTransform(ee_frame_id_);
+
     const std::lock_guard<std::mutex> lock(input_mutex_);
     desired_ee_pose_ = next_tip_frame;
   }
@@ -1295,6 +1319,18 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   last_desired_delta_x_ = desired_delta_x_;
   previous_joint_state_ = current_joint_state_;
   current_joint_state_ = next_joint_state_;
+
+  debug_data_.clear();
+  size_t jti = std::find(joint_trajectory.joint_names.begin(), joint_trajectory.joint_names.end(), "joint6") - joint_trajectory.joint_names.begin();
+  size_t rsi = std::find(real_joint_state_.name.begin(), real_joint_state_.name.end(), "joint6") - real_joint_state_.name.begin();
+  size_t csi = std::find(current_joint_state_.name.begin(), current_joint_state_.name.end(), "joint6") - current_joint_state_.name.begin();
+  debug_data_.push_back(!joint_trajectory.points.empty() && jti < joint_trajectory.points[0].positions.size() ? joint_trajectory.points[0].positions[jti] : 0.0);
+  debug_data_.push_back(rsi < real_joint_state_.position.size() ? real_joint_state_.position[rsi] : 0.0);
+  debug_data_.push_back(csi < current_joint_state_.position.size() ? current_joint_state_.position[csi] : 0.0);
+  debug_data_.push_back(!joint_trajectory.points.empty() && jti < joint_trajectory.points[0].velocities.size() ? joint_trajectory.points[0].velocities[jti] : 0.0);
+  debug_data_.push_back(rsi < real_joint_state_.velocity.size() ? real_joint_state_.velocity[rsi] : 0.0);
+  debug_data_.push_back(csi < current_joint_state_.velocity.size() ? current_joint_state_.velocity[csi] : 0.0);
+
   return true;
 }
 
