@@ -117,14 +117,6 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   double scene_collision_distance = distance_result.minimum_distance.distance;
   auto distances = distance_result.distances;
 
-  auto group = current_state.getJointModelGroup(servo_params_->move_group_name);
-  Eigen::Isometry3d ee_trans = current_state.getGlobalLinkTransform(group->getLinkModelNames().back());
-  double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
-  Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
-  Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
-  double ws_bounds_distance = -workspace_bounds_.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
-  scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
-
   distance_result.clear();
   // Self-collisions and scene collisions are checked separately so different thresholds can be used
   scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, current_state);
@@ -132,6 +124,9 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
   for (auto &dist : distance_result.distances)
     distances[dist.first].insert(distances[dist.first].end(), dist.second.begin(), dist.second.end());
 
+  addWorkspaceDistances(current_state, servo_params, distances, scene_collision_distance);
+
+  auto group = current_state.getJointModelGroup(servo_params_->move_group_name);
   double velocity_scale = 1;
 
   if (scene_collision_distance < servo_params.scene_collision_proximity_threshold || self_collision_distance < servo_params.self_collision_proximity_threshold) {
@@ -200,6 +195,8 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
               next_scene->getCollisionEnvUnpadded()->distanceSelf(distance_request, distance_result, next_state);
               for (auto &dist : distance_result.distances)
                 next_distances[dist.first].insert(next_distances[dist.first].end(), dist.second.begin(), dist.second.end());
+              double unused_distance;
+              addWorkspaceDistances(next_state, servo_params, next_distances, unused_distance);
             }
             auto &ndist = next_distances[dist.first];
             if (ndist.empty()) {
@@ -247,6 +244,78 @@ double CollisionCheck::getCollisionVelocityScale(const Eigen::ArrayXd& delta_the
     collision_velocity_scale_pub_->publish(std::move(msg));
   }
   return velocity_scale;
+}
+
+void CollisionCheck::addWorkspaceDistances(const moveit::core::RobotState& robot_state, const servo::Params &servo_params,
+                                           collision_detection::DistanceMap& distances, double &scene_collision_distance) const
+{
+  auto group = robot_state.getJointModelGroup(servo_params_->move_group_name);
+  auto ee_name = group->getLinkModelNames().back();
+  Eigen::Isometry3d ee_trans = robot_state.getGlobalLinkTransform(ee_name);
+  double col_prox_threshold = servo_params.scene_collision_proximity_threshold;
+  Eigen::Vector3d inset(col_prox_threshold, col_prox_threshold, col_prox_threshold);
+  Eigen::AlignedBox3d inset_bounds(workspace_bounds_.min() + inset, workspace_bounds_.max() - inset);
+  double ws_bounds_distance = -inset_bounds.exteriorDistance(ee_trans.translation()) + col_prox_threshold;
+  scene_collision_distance = std::min(scene_collision_distance, ws_bounds_distance);
+  if (ws_bounds_distance < col_prox_threshold) {
+    RCLCPP_INFO(LOGGER, "Proximity detected between end effector and workspace bounds at distance %f", ws_bounds_distance);
+    Eigen::Vector3d ee_pos = ee_trans.translation();
+    Eigen::Vector3d ws_min = workspace_bounds_.min();
+    Eigen::Vector3d ws_max = workspace_bounds_.max();
+
+    collision_detection::DistanceResultsData dist_data;
+    dist_data.link_names[0] = ee_name;
+    dist_data.nearest_points[0] = ee_pos;
+
+    if (ee_pos.x() - ws_min.x() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_left and ee: %f", ee_pos.x() - ws_min.x());
+      dist_data.link_names[1] = "$$$ws_left";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ws_min.x(), ee_pos.y(), ee_pos.z());
+      dist_data.normal = Eigen::Vector3d(-1, 0, 0);
+      dist_data.distance = ee_pos.x() - ws_min.x();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+    if (ws_max.x() - ee_pos.x() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_right and ee: %f", ws_max.x() - ee_pos.x());
+      dist_data.link_names[1] = "$$$ws_right";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ws_max.x(), ee_pos.y(), ee_pos.z());
+      dist_data.normal = Eigen::Vector3d(1, 0, 0);
+      dist_data.distance = ws_max.x() - ee_pos.x();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+    if (ee_pos.y() - ws_min.y() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_back and ee: %f", ee_pos.y() - ws_min.y());
+      dist_data.link_names[1] = "$$$ws_back";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ee_pos.x(), ws_min.y(), ee_pos.z());
+      dist_data.normal = Eigen::Vector3d(0, -1, 0);
+      dist_data.distance = ee_pos.y() - ws_min.y();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+    if (ws_max.y() - ee_pos.y() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_front and ee: %f", ws_max.y() - ee_pos.y());
+      dist_data.link_names[1] = "$$$ws_front";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ee_pos.x(), ws_max.y(), ee_pos.z());
+      dist_data.normal = Eigen::Vector3d(0, 1, 0);
+      dist_data.distance = ws_max.y() - ee_pos.y();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+    if (ee_pos.z() - ws_min.z() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_bottom and ee: %f", ee_pos.z() - ws_min.z());
+      dist_data.link_names[1] = "$$$ws_bottom";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ee_pos.x(), ee_pos.y(), ws_min.z());
+      dist_data.normal = Eigen::Vector3d(0, 0, -1);
+      dist_data.distance = ee_pos.z() - ws_min.z();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+    if (ws_max.z() - ee_pos.z() < col_prox_threshold) {
+      RCLCPP_INFO(LOGGER, "dist between ws_top and ee: %f", ws_max.z() - ee_pos.z());
+      dist_data.link_names[1] = "$$$ws_top";
+      dist_data.nearest_points[1] = Eigen::Vector3d(ee_pos.x(), ee_pos.y(), ws_max.z());
+      dist_data.normal = Eigen::Vector3d(0, 0, 1);
+      dist_data.distance = ws_max.z() - ee_pos.z();
+      distances[{ee_name, dist_data.link_names[1]}].push_back(dist_data);
+    }
+  }
 }
 
 void CollisionCheck::setWorkspaceBounds(Eigen::AlignedBox3d workspace_bounds)

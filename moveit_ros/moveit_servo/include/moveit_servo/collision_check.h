@@ -91,5 +91,8 @@ private:
 
   // ROS
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr collision_velocity_scale_pub_;
+
+  void addWorkspaceDistances(const moveit::core::RobotState& robot_state, const servo::Params &servo_params,
+                             collision_detection::DistanceMap& distances, double &scene_collision_distance) const;
 };
 }  // namespace moveit_servo
