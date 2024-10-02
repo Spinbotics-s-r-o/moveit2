@@ -912,6 +912,14 @@ Eigen::VectorXd Trajectory::getAcceleration(double time) const
   return path_acc;
 }
 
+Eigen::VectorXd Trajectory::getMaxVelocity(double time) const
+{
+  std::list<TrajectoryStep>::const_iterator it = getTrajectorySegment(time);
+  double max_path_velocity = getVelocityMaxPathVelocity(it->path_pos_);
+  Eigen::VectorXd tangent = path_.getTangent(it->path_pos_);
+  return max_path_velocity * tangent.array().abs().matrix();
+}
+
 TimeOptimalTrajectoryGeneration::TimeOptimalTrajectoryGeneration(const double path_tolerance, const double resample_dt,
                                                                  const double min_angle_change)
   : path_tolerance_(path_tolerance), resample_dt_(resample_dt), min_angle_change_(min_angle_change)
@@ -1253,6 +1261,22 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   // Compute sample count
   size_t sample_count = std::ceil(parameterized.getDuration() / resample_dt_);
 
+  // Additional correction factor to ensure that the resampled trajectory respects the velocity and acceleration limits
+  double correction = 1.0;
+  for (size_t sample = 0; sample <= sample_count; ++sample) {
+    // always sample the end of the trajectory as well
+    double t = std::min(parameterized.getDuration(), sample * resample_dt_);
+    Eigen::ArrayXd vel = parameterized.getVelocity(t).array().abs();
+    Eigen::ArrayXd vel_violation = vel/max_velocity.array();
+    Eigen::ArrayXd path_vel_violation = vel/parameterized.getMaxVelocity(t).array();
+    Eigen::ArrayXd acc_violation = parameterized.getAcceleration(t).array().abs()/max_acceleration.array();
+    double max_violation = std::max(path_vel_violation.maxCoeff(), std::max(vel_violation.maxCoeff(), sqrt(acc_violation.maxCoeff())));
+    // if (max_violation > 1.0)
+    //   RCLCPP_INFO_STREAM(LOGGER, "vel/acc limit violated: " << max_violation << " at t=" << t << "\n" <<
+    //       "vel: " << vel_violation.transpose() << "\npath_vel: " << path_vel_violation.transpose() << "\nacc: " << acc_violation.transpose());
+    correction = std::max(correction, max_violation);
+  }
+
   // Resample and fill in trajectory
   moveit::core::RobotState waypoint = moveit::core::RobotState(trajectory.getWayPoint(0));
   trajectory.clear();
@@ -1268,11 +1292,11 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
     for (size_t j = 0; j < num_joints; ++j)
     {
       waypoint.setVariablePosition(idx[j], position[j]);
-      waypoint.setVariableVelocity(idx[j], velocity[j]);
-      waypoint.setVariableAcceleration(idx[j], acceleration[j]);
+      waypoint.setVariableVelocity(idx[j], velocity[j]/correction);
+      waypoint.setVariableAcceleration(idx[j], acceleration[j]/pow(correction, 2));
     }
 
-    trajectory.addSuffixWayPoint(waypoint, t - last_t);
+    trajectory.addSuffixWayPoint(waypoint, t*correction - last_t*correction);
     last_t = t;
   }
 

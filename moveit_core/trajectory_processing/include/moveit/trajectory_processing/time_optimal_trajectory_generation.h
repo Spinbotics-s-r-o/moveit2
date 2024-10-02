@@ -141,6 +141,8 @@ public:
   /** @brief Return the acceleration vector for a given point in time */
   Eigen::VectorXd getAcceleration(double time) const;
 
+  Eigen::VectorXd getMaxVelocity(double time) const;
+
 private:
   struct TrajectoryStep
   {
