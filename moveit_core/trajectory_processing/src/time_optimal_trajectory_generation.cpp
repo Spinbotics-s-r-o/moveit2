@@ -1186,8 +1186,13 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   }
 
   const unsigned num_points = trajectory.getWayPointCount();
-  const std::vector<int>& idx = group->getVariableIndexList();
-  const unsigned num_joints = group->getVariableCount();
+  const std::vector<int> idx = group->getVariableIndexList();
+  std::vector<size_t> act_idx;
+  if (!group->computeJointVariableIndices(group->getActiveJointModelNames(), act_idx))
+  {
+    RCLCPP_ERROR(LOGGER, "Failed to get active variable indices.");
+  }
+  const unsigned num_joints = group->getActiveVariableCount();
 
   // Have to convert into Eigen data structs and remove repeated points
   //  (https://github.com/tobiaskunz/trajectories/issues/3)
@@ -1203,7 +1208,7 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
 
     for (size_t j = 0; j < num_joints; ++j)
     {
-      new_point[j] = waypoint->getVariablePosition(idx[j]);
+      new_point[j] = waypoint->getVariablePosition(idx[act_idx[j]]);
       // If any joint angle is different, it's a unique waypoint
       if (p > 0 && std::fabs(new_point[j] - points.back()[j]) > min_angle_change_)
       {
@@ -1248,7 +1253,7 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   {
     moveit::core::RobotStatePtr start_waypoint = trajectory.getWayPointPtr(0);
     for (size_t j = 0; j < num_joints; ++j)
-      start_velocity[j] = start_waypoint->getVariableVelocity(idx[j]);
+      start_velocity[j] = start_waypoint->getVariableVelocity(idx[act_idx[j]]);
   }
   // Now actually call the algorithm
   Trajectory parameterized(Path(points, path_tolerance_, min_durations), max_velocity, max_acceleration, DEFAULT_TIMESTEP, start_velocity);
@@ -1291,9 +1296,9 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
 
     for (size_t j = 0; j < num_joints; ++j)
     {
-      waypoint.setVariablePosition(idx[j], position[j]);
-      waypoint.setVariableVelocity(idx[j], velocity[j]/correction);
-      waypoint.setVariableAcceleration(idx[j], acceleration[j]/pow(correction, 2));
+      waypoint.setVariablePosition(idx[act_idx[j]], position[j]);
+      waypoint.setVariableVelocity(idx[act_idx[j]], velocity[j]/correction);
+      waypoint.setVariableAcceleration(idx[act_idx[j]], acceleration[j]/pow(correction, 2));
     }
 
     trajectory.addSuffixWayPoint(waypoint, t*correction - last_t*correction);
