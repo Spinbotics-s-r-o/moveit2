@@ -49,7 +49,7 @@ MOVEIT_CLASS_FORWARD(RobotTrajectory);
 namespace trajectory_processing
 {
 bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, const double speed,
-                                const moveit::core::LinkModel* link_model);
+                                const moveit::core::LinkModel* link_model, const double max_segment_angle_diff = 0.0524);
 bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, const double speed,
-                                const std::string& link_name = "");
+                                const std::string& link_name = "", const double max_segment_angle_diff = 0.0524);
 }  // namespace trajectory_processing

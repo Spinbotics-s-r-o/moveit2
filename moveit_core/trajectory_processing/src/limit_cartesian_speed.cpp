@@ -46,7 +46,7 @@ const rclcpp::Logger LOGGER = rclcpp::get_logger("moveit_trajectory_processing.l
 }
 
 bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, const double max_speed,
-                                const std::string& link_name)
+                                const std::string& link_name, const double max_segment_angle_diff)
 {
   std::vector<const moveit::core::LinkModel*> links;
 
@@ -75,7 +75,7 @@ bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, c
   // Call function for speed setting using the created link model
   for (const auto& link : links)
   {
-    if (!limitMaxCartesianLinkSpeed(trajectory, max_speed, link))
+    if (!limitMaxCartesianLinkSpeed(trajectory, max_speed, link, max_segment_angle_diff))
       return false;
   }
 
@@ -83,7 +83,7 @@ bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, c
 }
 
 bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, const double max_speed,
-                                const moveit::core::LinkModel* link_model)
+                                const moveit::core::LinkModel* link_model, const double max_segment_angle_diff)
 {
   if (max_speed <= 0.0)
   {
@@ -94,6 +94,40 @@ bool limitMaxCartesianLinkSpeed(robot_trajectory::RobotTrajectory& trajectory, c
   size_t num_waypoints = trajectory.getWayPointCount();
   if (num_waypoints == 0)
     return false;
+
+  // split segments at max_segment_angle_diff to make chord length more similar to arc length
+  if (max_speed < 1e9 && max_segment_angle_diff > 0.0)  // no need to split if max_speed is not constrained
+  {
+    for (size_t i = 0; i < num_waypoints - 1; i++)
+    {
+      auto wp1 = trajectory.getWayPointPtr(i);
+      auto wp2 = trajectory.getWayPointPtr(i + 1);
+
+      double max_angle = 0.0;
+      auto joint_positions1 = wp1->getVariablePositions();
+      auto joint_positions2 = wp2->getVariablePositions();
+      size_t var_cnt = wp1->getVariableCount();
+      for (size_t j = 0; j < var_cnt; j++)
+        max_angle = std::max(max_angle, std::abs(joint_positions2[j] - joint_positions1[j]));
+
+      if (max_angle > max_segment_angle_diff) {
+        // split segment
+        size_t segment_count = std::ceil(max_angle / max_segment_angle_diff);
+
+        // split segment into multiple segments
+        for (size_t k = 1; k < segment_count; k++)
+        {
+          auto new_wp = std::make_shared<moveit::core::RobotState>(*wp1);
+          for (size_t j = 0; j < var_cnt; j++)
+            new_wp->setVariablePosition(j, joint_positions1[j] + k*(joint_positions2[j] - joint_positions1[j])/segment_count);
+          trajectory.insertWayPoint(i + k, new_wp, 0.0);
+        }
+
+        i += segment_count - 1;
+        num_waypoints += segment_count - 1;
+      }
+    }
+  }
 
   // do forward kinematics to get Cartesian positions of link for current waypoint
   double euclidean_distance, new_time_diff, old_time_diff;

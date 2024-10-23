@@ -1277,8 +1277,10 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
     Eigen::ArrayXd acc_violation = parameterized.getAcceleration(t).array().abs()/max_acceleration.array();
     double max_violation = std::max(path_vel_violation.maxCoeff(), std::max(vel_violation.maxCoeff(), sqrt(acc_violation.maxCoeff())));
     // if (max_violation > 1.0)
-    //   RCLCPP_INFO_STREAM(LOGGER, "vel/acc limit violated: " << max_violation << " at t=" << t << "\n" <<
-    //       "vel: " << vel_violation.transpose() << "\npath_vel: " << path_vel_violation.transpose() << "\nacc: " << acc_violation.transpose());
+    //   RCLCPP_INFO_STREAM(LOGGER, "vel/acc limit violated?: " << max_violation << " at t=" << t << "\n" <<
+    //       "vel_viol: " << vel_violation.transpose() << "\npath_vel_viol: " << path_vel_violation.transpose() << "\nacc_viol: " << acc_violation.transpose() <<
+    //       "\nvel: " << vel.transpose() << "\nmax_vel: " << max_velocity.transpose() << "\nmax_path_vel: " << parameterized.getMaxVelocity(t).transpose() <<
+    //       "\nacc: " << parameterized.getAcceleration(t).transpose() << "\nmax_acc: " << max_acceleration.transpose());
     correction = std::max(correction, max_violation);
   }
 
