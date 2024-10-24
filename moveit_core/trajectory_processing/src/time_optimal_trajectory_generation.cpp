@@ -712,8 +712,23 @@ void Trajectory::integrateBackward(std::list<TrajectoryStep>& start_trajectory, 
     }
   }
 
+  if (path_pos <= 0.0 && start1->path_vel_ != 0.0) {
+    double adjusted_start_vel = trajectory.front().path_vel_ - slope * (trajectory.front().path_pos_ - start1->path_pos_);
+
+    RCLCPP_WARN(LOGGER, "Did not reach start velocity when integrating backward. Will adjust the start velocity from %lf to %lf if it is similar enough (%lf/%lf > 0.9).",
+                start1->path_vel_, adjusted_start_vel, std::min(adjusted_start_vel, start1->path_vel_), std::max(adjusted_start_vel, start1->path_vel_));
+    if (std::min(adjusted_start_vel, start1->path_vel_)/std::max(adjusted_start_vel, start1->path_vel_) > 0.95) {  // TODO: parametrize threshold
+      start1->path_vel_ = adjusted_start_vel;
+      start_trajectory.erase(start2, start_trajectory.end());
+      start_trajectory.splice(start_trajectory.end(), trajectory);
+      return;
+    }
+  }
+
   valid_ = false;
-  RCLCPP_ERROR(LOGGER, "Error while integrating backward: Did not hit start trajectory");
+  RCLCPP_ERROR(LOGGER, "Error while integrating backward: Did not hit start trajectory.\n"
+                       "path_pos: %lf, path_vel: %lf, start1->path_pos_: %lf, start1->path_vel_: %lf, start2->path_pos_: %lf, start2->path_vel_: %lf",
+                       path_pos, path_vel, start1->path_pos_, start1->path_vel_, start2->path_pos_, start2->path_vel_);
   end_trajectory_ = trajectory;
 }
 
