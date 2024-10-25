@@ -717,7 +717,9 @@ void Trajectory::integrateBackward(std::list<TrajectoryStep>& start_trajectory, 
 
     RCLCPP_WARN(LOGGER, "Did not reach start velocity when integrating backward. Will adjust the start velocity from %lf to %lf if it is similar enough (%lf/%lf > 0.9).",
                 start1->path_vel_, adjusted_start_vel, std::min(adjusted_start_vel, start1->path_vel_), std::max(adjusted_start_vel, start1->path_vel_));
-    if (std::min(adjusted_start_vel, start1->path_vel_)/std::max(adjusted_start_vel, start1->path_vel_) > 0.95) {  // TODO: parametrize threshold
+    double adjustment_ratio = std::min(adjusted_start_vel, start1->path_vel_)/std::max(adjusted_start_vel, start1->path_vel_);
+    start_velocity_hit_error_ = (1.0 + start_velocity_hit_error_)*(start1->path_vel_ > adjusted_start_vel ? 1.0/adjustment_ratio : adjustment_ratio) - 1.0;
+    if (adjustment_ratio > 0.95) {  // TODO: parametrize threshold
       start1->path_vel_ = adjusted_start_vel;
       start_trajectory.erase(start2, start_trajectory.end());
       start_trajectory.splice(start_trajectory.end(), trajectory);
@@ -933,6 +935,11 @@ Eigen::VectorXd Trajectory::getMaxVelocity(double time) const
   double max_path_velocity = getVelocityMaxPathVelocity(it->path_pos_);
   Eigen::VectorXd tangent = path_.getTangent(it->path_pos_);
   return max_path_velocity * tangent.array().abs().matrix();
+}
+
+double Trajectory::startVelocityHitError() const
+{
+  return start_velocity_hit_error_;
 }
 
 TimeOptimalTrajectoryGeneration::TimeOptimalTrajectoryGeneration(const double path_tolerance, const double resample_dt,
@@ -1180,6 +1187,11 @@ void TimeOptimalTrajectoryGeneration::setUseStartVelocity(bool use_start_velocit
   use_start_velocity_ = use_start_velocity;
 }
 
+double TimeOptimalTrajectoryGeneration::getStartVelocityHitError() const
+{
+  return *start_velocity_hit_error_;
+}
+
 bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_trajectory::RobotTrajectory& trajectory,
                                                                          const Eigen::VectorXd& max_velocity,
                                                                          const Eigen::VectorXd& max_acceleration) const
@@ -1274,6 +1286,7 @@ bool TimeOptimalTrajectoryGeneration::doTimeParameterizationCalculations(robot_t
   Trajectory parameterized(Path(points, path_tolerance_, min_durations), max_velocity, max_acceleration, DEFAULT_TIMESTEP, start_velocity);
   if (!parameterized.isValid())
   {
+    *start_velocity_hit_error_ = parameterized.startVelocityHitError();
     RCLCPP_ERROR(LOGGER, "Unable to parameterize trajectory.");
     return false;
   }

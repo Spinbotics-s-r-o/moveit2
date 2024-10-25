@@ -143,6 +143,8 @@ public:
 
   Eigen::VectorXd getMaxVelocity(double time) const;
 
+  double startVelocityHitError() const;
+
 private:
   struct TrajectoryStep
   {
@@ -187,6 +189,8 @@ private:
 
   mutable double cached_time_;
   mutable std::list<TrajectoryStep>::const_iterator cached_trajectory_segment_;
+
+  double start_velocity_hit_error_ = 0.0;
 };
 
 MOVEIT_CLASS_FORWARD(TimeOptimalTrajectoryGeneration);
@@ -256,6 +260,7 @@ public:
                          const double max_acceleration_scaling_factor = 1.0) const override;
 
   void setUseStartVelocity(bool use_start_velocity);
+  double getStartVelocityHitError() const;
 private:
   bool doTimeParameterizationCalculations(robot_trajectory::RobotTrajectory& trajectory,
                                           const Eigen::VectorXd& max_velocity,
@@ -280,6 +285,7 @@ private:
   const double resample_dt_;
   const double min_angle_change_;
   bool use_start_velocity_ = false;
+  std::shared_ptr<double> start_velocity_hit_error_ = std::make_shared<double>(0.0);
 };
 
 // clang-format off
