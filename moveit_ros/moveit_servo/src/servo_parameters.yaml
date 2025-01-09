@@ -452,6 +452,12 @@ servo:
     description: "If true, servo will allow overpassing singularities at the cost of accuracy"
   }
 
+  check_collisions_while_accurate_servoing: {
+    type: bool,
+    default_value: true,
+    description: "If false, turns off collision checking for accurate servoing"
+  }
+
   ik_singularity_penalty_type: {
     type: string,
     default_value: "none",

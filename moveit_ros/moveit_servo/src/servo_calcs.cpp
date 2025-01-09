@@ -1142,22 +1142,26 @@ bool ServoCalcs::internalServoUpdate(Eigen::ArrayXd& delta_theta,
   // 4. apply velocity limits
   // 5. apply position limits. This is a higher priority than velocity limits, so check it last.
 
-  // Apply collision scaling
-  collision_checker_.setWorkspaceBounds(movement_limits_.ee_pos_limits);  // apply tcp position limit
-  double collision_scale = collision_checker_.getCollisionVelocityScale(delta_theta);
-  if (collision_scale > 0 && collision_scale < 1)
+  if(servo_params_.allow_deviation || // accurate servoing off
+    (!servo_params_.allow_deviation && servo_params_.check_collisions_while_accurate_servoing))
   {
-    status_ = StatusCode::DECELERATE_FOR_COLLISION;
-    rclcpp::Clock& clock = *node_->get_clock();
-    RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, SERVO_STATUS_CODE_MAP.at(status_) << " " << collision_scale);
+    // Apply collision scaling
+    collision_checker_.setWorkspaceBounds(movement_limits_.ee_pos_limits);  // apply tcp position limit
+    double collision_scale = collision_checker_.getCollisionVelocityScale(delta_theta);
+    if (collision_scale > 0 && collision_scale < 1)
+    {
+      status_ = StatusCode::DECELERATE_FOR_COLLISION;
+      rclcpp::Clock& clock = *node_->get_clock();
+      RCLCPP_WARN_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, SERVO_STATUS_CODE_MAP.at(status_) << " " << collision_scale);
+    }
+    else if (collision_scale == 0)
+    {
+      status_ = StatusCode::HALT_FOR_COLLISION;
+      rclcpp::Clock& clock = *node_->get_clock();
+      RCLCPP_ERROR_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "Halting for collision!");
+    }
+    delta_theta *= collision_scale;
   }
-  else if (collision_scale == 0)
-  {
-    status_ = StatusCode::HALT_FOR_COLLISION;
-    rclcpp::Clock& clock = *node_->get_clock();
-    RCLCPP_ERROR_STREAM_THROTTLE(LOGGER, clock, ROS_LOG_THROTTLE_PERIOD, "Halting for collision!");
-  }
-  delta_theta *= collision_scale;
 
   // apply tcp velocity limit
   Eigen::MatrixXd jacobian = current_state_->getJacobian(joint_model_group_);
